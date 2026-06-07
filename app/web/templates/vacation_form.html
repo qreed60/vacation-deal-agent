@@ -148,13 +148,13 @@
   var hiddenField = document.getElementById('travelers_json_hidden');
   var travelersCountInput = document.getElementById('travelers');
 
-  // Parse existing JSON or start with one empty row
+  // Parse existing JSON or start with one empty row.
+  // Use Jinja2 tojson filter for safe JS embedding (handles quotes, special chars).
   function getInitialTravelers() {
-    var raw = '{% if vacation and vacation.travelers_json %}{{ vacation.travelers_json }}{% else %}{% endif %}';
+    var raw = {% if vacation and vacation.travelers_json %}{{ vacation.travelers_json | tojson }}{% else %}"[]"{% endif %};
     try {
-      var parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map(function(t) {
+      if (Array.isArray(raw) && raw.length > 0) {
+        return raw.map(function(t) {
           return { name: t.name || '', age: t.age != null ? String(t.age) : '' };
         });
       }
@@ -162,11 +162,26 @@
     return [{ name: '', age: '' }];
   }
 
-  var travelers = getInitialTravelers();
+  // Read current DOM state into an array of {name, age} objects.
+  function collectFromDom() {
+    var rows = editor.querySelectorAll('.traveler-row');
+    var result = [];
+    for (var i = 0; i < rows.length; i++) {
+      var nameInput = rows[i].querySelector('input[type="text"]');
+      var ageInput = rows[i].querySelector('input[type="number"]');
+      result.push({
+        name: nameInput ? nameInput.value : '',
+        age: ageInput ? ageInput.value : ''
+      });
+    }
+    return result;
+  }
 
-  function renderRows() {
+  // Render travelers array to DOM. Accepts parameter instead of reading global.
+  function renderRows(travelers) {
     editor.innerHTML = '';
-    travelers.forEach(function(t, i) {
+    for (var i = 0; i < travelers.length; i++) {
+      var t = travelers[i];
       var row = document.createElement('div');
       row.className = 'traveler-row';
       row.dataset.index = i;
@@ -200,43 +215,63 @@
       removeBtn.className = 'btn-remove-traveler';
       removeBtn.title = 'Remove traveler';
       removeBtn.textContent = '\u2715';
-      removeBtn.addEventListener('click', function() { removeTraveler(i); });
+      (function(idx) {
+        removeBtn.addEventListener('click', function() { removeTraveler(idx); });
+      })(i);
 
       row.appendChild(nameGroup);
       row.appendChild(ageGroup);
       row.appendChild(removeBtn);
       editor.appendChild(row);
-    });
-    updateCount();
+    }
   }
 
+  // Update the readonly traveler count input.
+  function updateCount(count) {
+    travelersCountInput.value = count;
+  }
+
+  // Add a new traveler: read DOM first, then add, then re-render.
   function addTraveler() {
+    var travelers = collectFromDom();
     travelers.push({ name: '', age: '' });
-    renderRows();
+    renderRows(travelers);
+    updateCount(travelers.length);
   }
 
+  // Remove a traveler: read DOM first, then remove, then re-render.
   function removeTraveler(index) {
+    var travelers = collectFromDom();
     if (travelers.length <= 1) return; // keep at least one
     travelers.splice(index, 1);
-    renderRows();
+    renderRows(travelers);
+    updateCount(travelers.length);
   }
 
-  function updateCount() {
-    travelersCountInput.value = travelers.length;
-  }
-
+  // Always read from DOM to ensure hidden field reflects current state.
   function syncHiddenField() {
-    var output = travelers.map(function(t) {
-      return { name: t.name || '', age: t.age !== '' ? parseInt(t.age, 10) : '' };
-    });
+    var rows = editor.querySelectorAll('.traveler-row');
+    var output = [];
+    for (var i = 0; i < rows.length; i++) {
+      var nameInput = rows[i].querySelector('input[type="text"]');
+      var ageInput = rows[i].querySelector('input[type="number"]');
+      var nameVal = nameInput ? nameInput.value : '';
+      var ageVal = ageInput ? ageInput.value : '';
+      output.push({
+        name: nameVal,
+        age: ageVal !== '' ? parseInt(ageVal, 10) : ''
+      });
+    }
     hiddenField.value = JSON.stringify(output);
   }
 
   addBtn.addEventListener('click', addTraveler);
   document.querySelector('form').addEventListener('submit', syncHiddenField);
 
-  // Initial render
-  renderRows();
+  // Initial render from parsed JSON or default blank row
+  var initial = getInitialTravelers();
+  renderRows(initial);
+  updateCount(initial.length);
 })();
 </script>
 
