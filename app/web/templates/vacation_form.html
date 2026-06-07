@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <h2>{% if vacation %}Edit vacation{% else %}Create vacation{% endif %}</h2>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="{{ action }}" class="form">
+    <label>Title <input name="title" value="{{ vacation.title if vacation else '' }}" required></label>
+    <label>Status <input name="status" value="{{ vacation.status if vacation else 'active' }}" required></label>
+    <label>Number of travelers <input name="number_of_travelers" type="number" min="1" value="{{ vacation.number_of_travelers if vacation else 1 }}" required></label>
+    <label>Travelers JSON <textarea name="travelers_json">{{ vacation.travelers_json if vacation else '[]' }}</textarea></label>
+    <label>Origin <input name="origin" value="{{ vacation.origin if vacation else '' }}" required></label>
+    <label>Destination <input name="destination" value="{{ vacation.destination if vacation else '' }}" required></label>
+    <label>Date mode
+      <select name="date_mode" required>
+        <option value="fixed_dates" {% if vacation and vacation.date_mode == 'fixed_dates' %}selected{% endif %}>fixed_dates</option>
+        <option value="flexible_window" {% if vacation and vacation.date_mode == 'flexible_window' %}selected{% endif %}>flexible_window</option>
+      </select>
+    </label>
+    <label>Start date <input name="start_date" type="date" value="{{ vacation.start_date if vacation and vacation.start_date else '' }}"></label>
+    <label>End date <input name="end_date" type="date" value="{{ vacation.end_date if vacation and vacation.end_date else '' }}"></label>
+    <label>Nights min <input name="nights_min" type="number" min="0" value="{{ vacation.nights_min if vacation and vacation.nights_min is not none else '' }}"></label>
+    <label>Nights target <input name="nights_target" type="number" min="0" value="{{ vacation.nights_target if vacation and vacation.nights_target is not none else '' }}"></label>
+    <label>Nights max <input name="nights_max" type="number" min="0" value="{{ vacation.nights_max if vacation and vacation.nights_max is not none else '' }}"></label>
+    <label><input name="hotel_needed" type="checkbox" {% if not vacation or vacation.hotel_needed %}checked{% endif %}> Hotel needed</label>
+    <label><input name="airfare_needed" type="checkbox" {% if not vacation or vacation.airfare_needed %}checked{% endif %}> Airfare needed</label>
+    <label><input name="rental_car_needed" type="checkbox" {% if vacation and vacation.rental_car_needed %}checked{% endif %}> Rental car needed</label>
+    <label>Special accommodations <textarea name="special_accommodations">{{ vacation.special_accommodations if vacation else '' }}</textarea></label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+{% endblock %}

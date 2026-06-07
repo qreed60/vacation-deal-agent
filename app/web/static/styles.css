@@ -1,0 +1,70 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.site-header,
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid #ddd;
+}
+
+.site-nav,
+.actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 680px;
+}
+
+.form label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+textarea {
+  min-height: 5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+
+.error {
+  color: #a40000;
+}
+
+.manifest {
+  white-space: pre-wrap;
+  background: #f6f6f6;
+  padding: 1rem;
+}

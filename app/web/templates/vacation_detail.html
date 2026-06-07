@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <h2>{{ vacation.title }}</h2>
+  <dl class="details">
+    <dt>Status</dt><dd>{{ vacation.status }}</dd>
+    <dt>Origin</dt><dd>{{ vacation.origin }}</dd>
+    <dt>Destination</dt><dd>{{ vacation.destination }}</dd>
+    <dt>Travelers</dt><dd>{{ vacation.number_of_travelers }}</dd>
+    <dt>Date mode</dt><dd>{{ vacation.date_mode }}</dd>
+  </dl>
+  <div class="actions">
+    <a href="/vacations/{{ vacation.id }}/edit">Edit</a>
+    <a href="/vacations/{{ vacation.id }}/export">Export manifest</a>
+    <form method="post" action="/vacations/{{ vacation.id }}/delete">
+      <button type="submit">Delete</button>
+    </form>
+  </div>
+  <h3>Manifest snapshot</h3>
+  <pre class="manifest">{{ manifest }}</pre>
+</section>
+{% endblock %}
