@@ -31,21 +31,25 @@
             </div>
             <div class="form-group">
               <label for="travelers">Number of travelers</label>
-              <input type="number" id="travelers" name="number_of_travelers" min="1" value="{{ vacation.number_of_travelers if vacation else 1 }}" required>
+              <input type="number" id="travelers" name="number_of_travelers" min="1" value="{{ vacation.number_of_travelers if vacation else 1 }}" required readonly style="background:#f8fafc; cursor:default;">
             </div>
           </div>
         </div>
       </fieldset>
 
-      <!-- Travelers JSON -->
+      <!-- Traveler Details -->
       <fieldset class="fieldset-section">
         <legend class="fieldset-legend">Traveler Details</legend>
-        <div class="form-group">
-          <label for="travelers_json">Travelers JSON</label>
-          <textarea id="travelers_json" name="travelers_json" rows="3" placeholder='[{"name":"Alice","age":30},{"name":"Bob","age":28}]'>{% if vacation %}{{ vacation.travelers_json }}{% else %}[{"name":"","age":""}]{% endif %}</textarea>
-          <p class="form-hint">JSON array of traveler objects (name, age, etc.)</p>
+        <div class="traveler-editor" id="travelerEditor">
+          <!-- Rows rendered by JS from travelers_json or default -->
         </div>
+        <button type="button" class="btn-add-traveler" id="addTravelerBtn">
+          + Add traveler
+        </button>
       </fieldset>
+
+      <!-- Hidden field for backend compatibility -->
+      <input type="hidden" id="travelers_json_hidden" name="travelers_json" value="">
 
       <!-- Route -->
       <fieldset class="fieldset-section">
@@ -136,4 +140,104 @@
     </form>
   </div>
 </section>
+
+<script>
+(function() {
+  var editor = document.getElementById('travelerEditor');
+  var addBtn = document.getElementById('addTravelerBtn');
+  var hiddenField = document.getElementById('travelers_json_hidden');
+  var travelersCountInput = document.getElementById('travelers');
+
+  // Parse existing JSON or start with one empty row
+  function getInitialTravelers() {
+    var raw = '{% if vacation and vacation.travelers_json %}{{ vacation.travelers_json }}{% else %}{% endif %}';
+    try {
+      var parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(function(t) {
+          return { name: t.name || '', age: t.age != null ? String(t.age) : '' };
+        });
+      }
+    } catch(e) {}
+    return [{ name: '', age: '' }];
+  }
+
+  var travelers = getInitialTravelers();
+
+  function renderRows() {
+    editor.innerHTML = '';
+    travelers.forEach(function(t, i) {
+      var row = document.createElement('div');
+      row.className = 'traveler-row';
+      row.dataset.index = i;
+
+      var nameGroup = document.createElement('div');
+      nameGroup.className = 'form-group';
+      nameGroup.innerHTML = '<label for="traveler_name_' + i + '">Name</label>';
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.id = 'traveler_name_' + i;
+      nameInput.name = 'traveler_name_' + i;
+      nameInput.value = t.name || '';
+      nameInput.placeholder = 'Traveler name';
+      nameGroup.appendChild(nameInput);
+
+      var ageGroup = document.createElement('div');
+      ageGroup.className = 'form-group';
+      ageGroup.innerHTML = '<label for="traveler_age_' + i + '">Age</label>';
+      var ageInput = document.createElement('input');
+      ageInput.type = 'number';
+      ageInput.id = 'traveler_age_' + i;
+      ageInput.name = 'traveler_age_' + i;
+      ageInput.min = '0';
+      ageInput.max = '120';
+      ageInput.value = t.age || '';
+      ageInput.placeholder = 'Age';
+      ageGroup.appendChild(ageInput);
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn-remove-traveler';
+      removeBtn.title = 'Remove traveler';
+      removeBtn.textContent = '\u2715';
+      removeBtn.addEventListener('click', function() { removeTraveler(i); });
+
+      row.appendChild(nameGroup);
+      row.appendChild(ageGroup);
+      row.appendChild(removeBtn);
+      editor.appendChild(row);
+    });
+    updateCount();
+  }
+
+  function addTraveler() {
+    travelers.push({ name: '', age: '' });
+    renderRows();
+  }
+
+  function removeTraveler(index) {
+    if (travelers.length <= 1) return; // keep at least one
+    travelers.splice(index, 1);
+    renderRows();
+  }
+
+  function updateCount() {
+    travelersCountInput.value = travelers.length;
+  }
+
+  function syncHiddenField() {
+    var output = travelers.map(function(t) {
+      return { name: t.name || '', age: t.age !== '' ? parseInt(t.age, 10) : '' };
+    });
+    hiddenField.value = JSON.stringify(output);
+  }
+
+  addBtn.addEventListener('click', addTraveler);
+  document.querySelector('form').addEventListener('submit', syncHiddenField);
+
+  // Initial render
+  renderRows();
+})();
+</script>
+
 {% endblock %}

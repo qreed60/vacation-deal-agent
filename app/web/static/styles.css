@@ -442,6 +442,85 @@ textarea {
   border-top: 1px solid var(--border-color);
 }
 
+/* --- Traveler Editor --- */
+.traveler-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.traveler-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.traveler-row .form-group {
+  margin-bottom: 0;
+}
+
+.traveler-row input[type="text"] {
+  width: auto;
+  min-width: 160px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.875rem;
+}
+
+.traveler-row input[type="number"] {
+  width: 72px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.btn-remove-traveler {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 1rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.btn-remove-traveler:hover {
+  background: #fef2f2;
+  color: var(--color-danger);
+  border-color: #fecaca;
+}
+
+.btn-add-traveler {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.btn-add-traveler:hover {
+  background: #eff6ff;
+  color: var(--color-primary-hover);
+  border-color: var(--color-primary);
+}
+
 /* --- Detail View --- */
 .detail-header {
   display: flex;
