@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <div class="card">
+    <div class="detail-header">
+      <h2 class="detail-title">Search runs for {{ vacation.title }}</h2>
+      <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary">Back to vacation</a>
+    </div>
+
+    {% if runs %}
+      <table class="vacation-table">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Status</th>
+            <th>Trigger</th>
+            <th>Started</th>
+            <th>Completed</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in runs %}
+            <tr>
+              <td data-label="Run">#{{ run.id }}</td>
+              <td data-label="Status">{{ run.status }}</td>
+              <td data-label="Trigger">{{ run.trigger_type }}</td>
+              <td data-label="Started">{{ run.started_at or '-' }}</td>
+              <td data-label="Completed">{{ run.completed_at or '-' }}</td>
+              <td data-label=""><a href="/search-runs/{{ run.id }}" class="btn btn-secondary btn-sm">View</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No search runs yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

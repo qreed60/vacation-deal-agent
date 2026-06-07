@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <div class="card">
+    <div class="detail-header">
+      <h2 class="detail-title">Search run #{{ search_run.id }}</h2>
+      {% if vacation %}
+        <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary">Back to vacation</a>
+      {% endif %}
+    </div>
+
+    <dl class="info-grid">
+      <div class="info-item">
+        <dt>Status</dt>
+        <dd>{{ search_run.status }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Trigger</dt>
+        <dd>{{ search_run.trigger_type }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Started</dt>
+        <dd>{{ search_run.started_at or '-' }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Completed</dt>
+        <dd>{{ search_run.completed_at or '-' }}</dd>
+      </div>
+    </dl>
+
+    {% if search_run.error_message %}
+      <p class="error-msg">{{ search_run.error_message }}</p>
+    {% endif %}
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Search plan JSON</h3>
+    <div class="manifest-block" style="margin-bottom:1.25rem;">
+      <pre>{{ search_plan }}</pre>
+    </div>
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Summary JSON</h3>
+    <div class="manifest-block" style="margin-bottom:1.25rem;">
+      <pre>{{ summary }}</pre>
+    </div>
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Source results</h3>
+    {% if source_results %}
+      {% for result in source_results %}
+        <div class="manifest-block" style="margin-bottom:1rem;">
+          <p style="margin:0 0 0.5rem;">
+            <strong>{{ result.result_type }}</strong>
+            from {{ result.source_name }}
+            ({{ result.status }})
+          </p>
+          {% if result.error_message %}
+            <p class="error-msg">{{ result.error_message }}</p>
+          {% endif %}
+          <h4 style="margin:0.75rem 0 0.25rem;">Query JSON</h4>
+          <pre>{{ result.query_json }}</pre>
+          <h4 style="margin:0.75rem 0 0.25rem;">Normalized JSON</h4>
+          <pre>{{ result.normalized_result_json }}</pre>
+          <h4 style="margin:0.75rem 0 0.25rem;">Raw JSON</h4>
+          <pre>{{ result.raw_result_json }}</pre>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>No source results were created.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

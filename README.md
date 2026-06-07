@@ -1,6 +1,6 @@
 # Vacation Deal Agent
 
-Phase 1 backend and integration for tracking vacation manifests.
+Phase 1 backend and Phase 2 mock search foundation for tracking vacation manifests.
 
 ## Setup
 
@@ -22,6 +22,23 @@ The application uses SQLite at `data/vacation_deals.sqlite3`.
 
 ```bash
 python -m pytest
+```
+
+## Run One Mock Search
+
+Phase 2 search runs use deterministic mock source responses only. They do not call
+SearXNG, Amadeus, Google Places, Duffel, MCP tools, or any external service.
+
+Run a mock search for one vacation:
+
+```bash
+python scripts/run_search_once.py --vacation-id 1
+```
+
+Run once for every active vacation:
+
+```bash
+python scripts/run_search_once.py --all-active
 ```
 
 ## Phase 1 Scope
@@ -48,3 +65,27 @@ Out of scope for Phase 1:
 - Polished UI styling
 
 Dyad owns later UI polish, templates, and styling. The current templates are intentionally simple and replaceable.
+
+## Phase 2 Scope
+
+Implemented:
+
+- Search runner foundation
+- `scripts/run_search_once.py`
+- Active vacation manifest loader
+- Deterministic query planner
+- `search_run` table
+- `source_result` table
+- Manual "Run search now" button
+- Mocked adapter responses for flight, hotel, and rental car queries
+
+Out of scope for Phase 2:
+
+- Real SearXNG, Amadeus, Google Places, or Duffel calls
+- MCP tools
+- Deal scoring
+- Price history charts
+- Periodic automation
+- Systemd services or timers
+- LLM summaries
+- Email or text notifications
