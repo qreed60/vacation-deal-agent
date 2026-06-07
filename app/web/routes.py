@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
-from app.db.models import Vacation
+from app.db.models import SearchRun, Vacation
 from app.db.session import get_session
 from app.services.manifest_io import (
     ManifestValidationError,
@@ -15,6 +15,7 @@ from app.services.manifest_io import (
     update_vacation_from_manifest,
     vacation_from_manifest,
 )
+from app.services.search_runner import run_search_once, source_results_for_run
 
 
 router = APIRouter()
@@ -140,10 +141,66 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
     if vacation is None:
         return HTMLResponse("Vacation not found", status_code=404)
     manifest = manifest_for_vacation(vacation)
+    recent_runs = session.exec(
+        select(SearchRun)
+        .where(SearchRun.vacation_id == vacation_id)
+        .order_by(SearchRun.created_at.desc())
+        .limit(5)
+    ).all()
     return templates.TemplateResponse(
         request,
         "vacation_detail.html",
-        {"vacation": vacation, "manifest": json.dumps(manifest, indent=2)},
+        {
+            "vacation": vacation,
+            "manifest": json.dumps(manifest, indent=2),
+            "recent_runs": recent_runs,
+        },
+    )
+
+
+@router.post("/vacations/{vacation_id}/search-runs")
+def create_search_run(vacation_id: int, session: Session = Depends(get_session)):
+    vacation = session.get(Vacation, vacation_id)
+    if vacation is None:
+        return HTMLResponse("Vacation not found", status_code=404)
+    run_search_once(vacation_id, "manual", session=session)
+    return redirect(f"/vacations/{vacation_id}")
+
+
+@router.get("/vacations/{vacation_id}/runs", response_class=HTMLResponse)
+def vacation_search_runs(vacation_id: int, request: Request, session: Session = Depends(get_session)):
+    vacation = session.get(Vacation, vacation_id)
+    if vacation is None:
+        return HTMLResponse("Vacation not found", status_code=404)
+    runs = session.exec(
+        select(SearchRun)
+        .where(SearchRun.vacation_id == vacation_id)
+        .order_by(SearchRun.created_at.desc())
+    ).all()
+    return templates.TemplateResponse(
+        request,
+        "search_run_list.html",
+        {"vacation": vacation, "runs": runs},
+    )
+
+
+@router.get("/search-runs/{search_run_id}", response_class=HTMLResponse)
+def search_run_detail(search_run_id: int, request: Request, session: Session = Depends(get_session)):
+    search_run = session.get(SearchRun, search_run_id)
+    if search_run is None:
+        return HTMLResponse("Search run not found", status_code=404)
+    vacation = session.get(Vacation, search_run.vacation_id)
+    source_results = source_results_for_run(session, search_run_id)
+    return templates.TemplateResponse(
+        request,
+        "search_run_detail.html",
+        {
+            "search_run": search_run,
+            "vacation": vacation,
+            "source_results": source_results,
+            "search_plan": json.dumps(json.loads(search_run.search_plan_json or "{}"), indent=2),
+            "summary": json.dumps(json.loads(search_run.summary_json or "{}"), indent=2),
+        },
     )
 
 
