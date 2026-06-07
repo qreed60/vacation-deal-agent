@@ -10,11 +10,22 @@
       {% endif %}
     </div>
 
-    <dl class="info-grid">
-      <div class="info-item">
-        <dt>Status</dt>
-        <dd>{{ search_run.status }}</dd>
+    <!-- Status Header -->
+    {% set status_class = 'status-header-' + search_run.status %}
+    <div class="status-header {{ status_class }}">
+      <span style="font-size:1.3rem;">
+        {% if search_run.status == 'completed' %}✅{% elif search_run.status == 'running' %}⏳{% elif search_run.status == 'pending' %}🕐{% else %}❌{% endif %}
+      </span>
+      <div>
+        <strong style="font-size:0.95rem; color:var(--text-heading);">
+          {% if search_run.status == 'completed' %}Completed{% elif search_run.status == 'running' %}Running{% elif search_run.status == 'pending' %}Pending{% else %}Failed{% endif %}
+        </strong>
+        <span style="margin-left:0.5rem; font-size:0.84rem; color:var(--text-muted);">— run #{{ search_run.id }}</span>
       </div>
+    </div>
+
+    <!-- Info Grid -->
+    <dl class="info-grid">
       <div class="info-item">
         <dt>Trigger</dt>
         <dd>{{ search_run.trigger_type }}</dd>
@@ -33,39 +44,96 @@
       <p class="error-msg">{{ search_run.error_message }}</p>
     {% endif %}
 
-    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Search plan JSON</h3>
+    <!-- Search Plan -->
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Search plan</h3>
     <div class="manifest-block" style="margin-bottom:1.25rem;">
       <pre>{{ search_plan }}</pre>
     </div>
 
-    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Summary JSON</h3>
+    <!-- Summary -->
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Summary</h3>
     <div class="manifest-block" style="margin-bottom:1.25rem;">
       <pre>{{ summary }}</pre>
     </div>
 
+    <!-- Source Results -->
+    <div class="section-divider"></div>
     <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Source results</h3>
     {% if source_results %}
       {% for result in source_results %}
-        <div class="manifest-block" style="margin-bottom:1rem;">
-          <p style="margin:0 0 0.5rem;">
-            <strong>{{ result.result_type }}</strong>
-            from {{ result.source_name }}
-            ({{ result.status }})
-          </p>
+        <div class="source-card">
+          <div class="source-card-header">
+            <p class="source-card-title">{{ result.result_type }} from {{ result.source_name }}</p>
+            <span class="source-card-meta">
+              {% if result.status == 'completed' %}
+                <span class="badge badge-success">Completed</span>
+              {% elif result.status == 'error' or result.status == 'failed' %}
+                <span class="badge badge-error">{{ result.status }}</span>
+              {% else %}
+                <span class="badge badge-info">{{ result.status }}</span>
+              {% endif %}
+            </span>
+          </div>
+
           {% if result.error_message %}
-            <p class="error-msg">{{ result.error_message }}</p>
+            <div style="padding:0.75rem 1rem;">
+              <p class="error-msg" style="margin:0;">{{ result.error_message }}</p>
+            </div>
           {% endif %}
-          <h4 style="margin:0.75rem 0 0.25rem;">Query JSON</h4>
-          <pre>{{ result.query_json }}</pre>
-          <h4 style="margin:0.75rem 0 0.25rem;">Normalized JSON</h4>
-          <pre>{{ result.normalized_result_json }}</pre>
-          <h4 style="margin:0.75rem 0 0.25rem;">Raw JSON</h4>
-          <pre>{{ result.raw_result_json }}</pre>
+
+          <!-- Query JSON -->
+          {% if result.query_json %}
+            <div class="json-section">
+              <div class="json-section-header" onclick="toggleJsonSection(this)">
+                <span>Query JSON</span>
+                <span class="json-section-toggle">▼</span>
+              </div>
+              <div class="json-section-body">
+                <pre style="margin:0; padding:1rem; font-family:'SF Mono','Fira Code','Cascadia Code',Menlo,Consolas,monospace; font-size:0.82rem; line-height:1.55; color:var(--text-body); white-space:pre-wrap; word-break:break-word;">{{ result.query_json }}</pre>
+              </div>
+            </div>
+          {% endif %}
+
+          <!-- Normalized JSON -->
+          {% if result.normalized_result_json %}
+            <div class="json-section">
+              <div class="json-section-header" onclick="toggleJsonSection(this)">
+                <span>Normalized JSON</span>
+                <span class="json-section-toggle">▼</span>
+              </div>
+              <div class="json-section-body">
+                <pre style="margin:0; padding:1rem; font-family:'SF Mono','Fira Code','Cascadia Code',Menlo,Consolas,monospace; font-size:0.82rem; line-height:1.55; color:var(--text-body); white-space:pre-wrap; word-break:break-word;">{{ result.normalized_result_json }}</pre>
+              </div>
+            </div>
+          {% endif %}
+
+          <!-- Raw JSON -->
+          {% if result.raw_result_json %}
+            <div class="json-section">
+              <div class="json-section-header" onclick="toggleJsonSection(this)">
+                <span>Raw JSON</span>
+                <span class="json-section-toggle">▼</span>
+              </div>
+              <div class="json-section-body">
+                <pre style="margin:0; padding:1rem; font-family:'SF Mono','Fira Code','Cascadia Code',Menlo,Consolas,monospace; font-size:0.82rem; line-height:1.55; color:var(--text-body); white-space:pre-wrap; word-break:break-word;">{{ result.raw_result_json }}</pre>
+              </div>
+            </div>
+          {% endif %}
         </div>
       {% endfor %}
     {% else %}
-      <p>No source results were created.</p>
+      <div class="runs-empty-state" style="padding:1.5rem 1rem;">
+        <p>No source results were created.</p>
+      </div>
     {% endif %}
+
+    <!-- Inline JS for collapsible sections -->
+    <script>
+      function toggleJsonSection(header) {
+        var section = header.parentElement;
+        section.classList.toggle('collapsed');
+      }
+    </script>
   </div>
 </section>
 {% endblock %}

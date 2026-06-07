@@ -24,7 +24,17 @@
           {% for run in runs %}
             <tr>
               <td data-label="Run">#{{ run.id }}</td>
-              <td data-label="Status">{{ run.status }}</td>
+              <td data-label="Status">
+                {% if run.status == 'completed' %}
+                  <span class="badge badge-success">Completed</span>
+                {% elif run.status == 'running' %}
+                  <span class="badge badge-warning">Running</span>
+                {% elif run.status == 'pending' %}
+                  <span class="badge badge-pending">Pending</span>
+                {% else %}
+                  <span class="badge badge-error">{{ run.status }}</span>
+                {% endif %}
+              </td>
               <td data-label="Trigger">{{ run.trigger_type }}</td>
               <td data-label="Started">{{ run.started_at or '-' }}</td>
               <td data-label="Completed">{{ run.completed_at or '-' }}</td>
@@ -34,7 +44,10 @@
         </tbody>
       </table>
     {% else %}
-      <p>No search runs yet.</p>
+      <div class="runs-empty-state">
+        <p style="font-size:1.05rem;">No search runs yet for this vacation.</p>
+        <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary">Back to vacation</a>
+      </div>
     {% endif %}
   </div>
 </section>
