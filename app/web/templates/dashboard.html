@@ -2,32 +2,68 @@
 
 {% block content %}
 <section class="section">
-  <h2>Vacations</h2>
+  <div class="dashboard-header">
+    <h2>Vacations</h2>
+    <a href="/vacations/new" class="btn btn-primary">+ New vacation</a>
+  </div>
+
   {% if vacations %}
-    <table class="vacation-list">
+    <table class="vacation-table">
       <thead>
         <tr>
           <th>Title</th>
           <th>Status</th>
-          <th>Origin</th>
-          <th>Destination</th>
+          <th>Route</th>
+          <th>Services</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for vacation in vacations %}
           <tr>
-            <td><a href="/vacations/{{ vacation.id }}">{{ vacation.title }}</a></td>
-            <td>{{ vacation.status }}</td>
-            <td>{{ vacation.origin }}</td>
-            <td>{{ vacation.destination }}</td>
-            <td><a href="/vacations/{{ vacation.id }}/edit">Edit</a></td>
+            <td data-label="Title">
+              <a href="/vacations/{{ vacation.id }}">{{ vacation.title }}</a>
+            </td>
+            <td data-label="Status">
+              {% if vacation.status == 'active' %}
+                <span class="badge badge-success">Active</span>
+              {% else %}
+                <span class="badge badge-warning">Archived</span>
+              {% endif %}
+            </td>
+            <td data-label="Route">
+              <span class="route-text">{{ vacation.origin }}</span>
+              <span class="route-arrow">→</span>
+              <span class="route-text">{{ vacation.destination }}</span>
+            </td>
+            <td data-label="Services">
+              <div class="service-pills">
+                {% if vacation.hotel_needed %}
+                  <span class="service-pill">🏨 Hotel</span>
+                {% endif %}
+                {% if vacation.airfare_needed %}
+                  <span class="service-pill">✈️ Airfare</span>
+                {% endif %}
+                {% if vacation.rental_car_needed %}
+                  <span class="service-pill">🚗 Car</span>
+                {% endif %}
+              </div>
+            </td>
+            <td data-label="">
+              <div class="actions-cell">
+                <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary btn-sm">View</a>
+                <a href="/vacations/{{ vacation.id }}/edit" class="btn btn-secondary btn-sm">Edit</a>
+              </div>
+            </td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   {% else %}
-    <p>No vacations yet.</p>
+    <div class="empty-state card">
+      <p>No vacations yet.</p>
+      <a href="/vacations/new" class="btn btn-primary">Create your first vacation</a>
+    </div>
   {% endif %}
 </section>
 {% endblock %}

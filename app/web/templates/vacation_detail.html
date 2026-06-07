@@ -2,22 +2,98 @@
 
 {% block content %}
 <section class="section">
-  <h2>{{ vacation.title }}</h2>
-  <dl class="details">
-    <dt>Status</dt><dd>{{ vacation.status }}</dd>
-    <dt>Origin</dt><dd>{{ vacation.origin }}</dd>
-    <dt>Destination</dt><dd>{{ vacation.destination }}</dd>
-    <dt>Travelers</dt><dd>{{ vacation.number_of_travelers }}</dd>
-    <dt>Date mode</dt><dd>{{ vacation.date_mode }}</dd>
-  </dl>
-  <div class="actions">
-    <a href="/vacations/{{ vacation.id }}/edit">Edit</a>
-    <a href="/vacations/{{ vacation.id }}/export">Export manifest</a>
-    <form method="post" action="/vacations/{{ vacation.id }}/delete">
-      <button type="submit">Delete</button>
-    </form>
+  <div class="card">
+    <!-- Header -->
+    <div class="detail-header">
+      <h2 class="detail-title">{{ vacation.title }}</h2>
+      <a href="/vacations/{{ vacation.id }}/edit" class="btn btn-secondary">Edit</a>
+    </div>
+
+    <!-- Info Grid -->
+    <dl class="info-grid">
+      <div class="info-item">
+        <dt>Status</dt>
+        <dd>
+          {% if vacation.status == 'active' %}
+            <span class="badge badge-success">Active</span>
+          {% else %}
+            <span class="badge badge-warning">Archived</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div class="info-item">
+        <dt>Date mode</dt>
+        <dd>{{ vacation.date_mode | replace('_', ' ') | title }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Route</dt>
+        <dd>
+          <span style="font-weight:600;">{{ vacation.origin }}</span>
+          <span style="color:var(--text-muted); margin:0 0.35rem;">→</span>
+          <span style="font-weight:600;">{{ vacation.destination }}</span>
+        </dd>
+      </div>
+      <div class="info-item">
+        <dt>Travelers</dt>
+        <dd>{{ vacation.number_of_travelers }}{% if vacation.number_of_travelers != 1 %} people{% else %} person{% endif %}</dd>
+      </div>
+    </dl>
+
+    <!-- Services -->
+    {% set has_services = vacation.hotel_needed or vacation.airfare_needed or vacation.rental_car_needed %}
+    {% if has_services %}
+      <h4 style="font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.03em; margin:0 0 0.5rem;">Services needed</h4>
+      <div class="service-row">
+        {% if vacation.hotel_needed %}
+          <span class="service-pill">🏨 Hotel</span>
+        {% endif %}
+        {% if vacation.airfare_needed %}
+          <span class="service-pill">✈️ Airfare</span>
+        {% endif %}
+        {% if vacation.rental_car_needed %}
+          <span class="service-pill">🚗 Rental car</span>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <!-- Dates Summary -->
+    <div class="dates-summary">
+      <h4>Dates</h4>
+      <div class="dates-values">
+        <span><span class="date-label">Start:</span> {{ vacation.start_date or '—' }}</span>
+        <span><span class="date-label">End:</span> {{ vacation.end_date or '—' }}</span>
+      </div>
+      {% if vacation.nights_min is not none or vacation.nights_target is not none or vacation.nights_max is not none %}
+        <div class="nights-list">
+          <span><span class="date-label">Nights:</span></span>
+          min: {{ vacation.nights_min or '—' }}
+          &nbsp;·&nbsp;
+          target: {{ vacation.nights_target or '—' }}
+          &nbsp;·&nbsp;
+          max: {{ vacation.nights_max or '—' }}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Special Requirements -->
+    {% if vacation.special_accommodations %}
+      <h4 style="font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.03em; margin:0 0 0.5rem;">Special requirements</h4>
+      <p style="margin:0 0 1.25rem; font-size:0.92rem;">{{ vacation.special_accommodations }}</p>
+    {% endif %}
+
+    <!-- Actions -->
+    <div class="form-actions" style="border-top:none; padding-top:0.75rem; margin-bottom:1.25rem;">
+      <a href="/vacations/{{ vacation.id }}/export" class="btn btn-secondary">Export manifest</a>
+      <form method="post" action="/vacations/{{ vacation.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this vacation?');" style="display:inline;">
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </form>
+    </div>
+
+    <!-- Manifest Snapshot -->
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Manifest snapshot</h3>
+    <div class="manifest-block">
+      <pre>{{ manifest }}</pre>
+    </div>
   </div>
-  <h3>Manifest snapshot</h3>
-  <pre class="manifest">{{ manifest }}</pre>
 </section>
 {% endblock %}

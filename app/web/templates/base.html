@@ -3,18 +3,19 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Vacation Deal Agent</title>
+    <title>{% block title %}Vacation Deal Agent{% endblock %}</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <header class="site-header">
-      <h1><a href="/">Vacation Deal Agent</a></h1>
-      <nav class="site-nav">
+    <nav class="navbar">
+      <a href="/" class="navbar-brand">Vacation Deal Agent</a>
+      <div class="navbar-links">
+        <a href="/">Dashboard</a>
         <a href="/vacations/new">New vacation</a>
         <a href="/import">Import manifest</a>
-      </nav>
-    </header>
-    <main class="page">
+      </div>
+    </nav>
+    <main class="page-wrapper">
       {% block content %}{% endblock %}
     </main>
   </body>

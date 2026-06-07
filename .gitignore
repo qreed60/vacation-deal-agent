@@ -9,3 +9,4 @@ data/snapshots/
 data/imports/*
 data/exports/*
 !.gitkeep
+.dyad/
