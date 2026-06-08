@@ -265,14 +265,53 @@ a:hover {
   margin-bottom: 1.25rem;
 }
 
-.component-detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
+.component-detail-card {
+  display: grid;
+  gap: 0.65rem;
   padding: 0.85rem;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: #f8fafc;
+}
+
+.component-detail-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.component-kicker {
+  margin: 0 0 0.15rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.component-provider {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--text-heading);
+  font-size: 1rem;
+}
+
+.component-code {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.component-detail-meta,
+.component-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.86rem;
 }
 
 .component-price {
@@ -280,6 +319,47 @@ a:hover {
   color: var(--text-heading);
   font-weight: 800;
   text-align: right;
+}
+
+.debug-details {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border-color);
+  padding-top: 1rem;
+}
+
+.debug-details summary {
+  color: var(--text-heading);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.debug-details h3 {
+  color: var(--text-heading);
+  font-size: 1rem;
+  margin: 1rem 0 0.75rem;
+}
+
+.source-display-list {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.source-display-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+}
+
+.source-display-provider {
+  margin: 0;
+  color: var(--text-heading);
+  font-weight: 700;
 }
 
 .price-chart {

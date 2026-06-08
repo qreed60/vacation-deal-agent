@@ -24,6 +24,16 @@ QUOTE_TYPE_LABELS = {
     "package": "Package",
 }
 
+SOURCE_NAME_LABELS = {
+    "amadeus": "Amadeus",
+    "google_places": "Google Places",
+    "mock_travel": "mock_travel",
+    "searxng": "SearXNG",
+    "serpapi_google_flights": "SerpAPI Google Flights",
+    "serpapi_google_hotels": "SerpAPI Google Hotels",
+    "structured_rental_car": "Structured rental car",
+}
+
 
 def required_quote_types(vacation: Vacation) -> list[str]:
     required = []
@@ -46,24 +56,64 @@ def _load_json(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _source_name_label(source_name: str | None) -> str:
+    if not source_name:
+        return "Unknown source"
+    return SOURCE_NAME_LABELS.get(source_name, source_name)
+
+
+def _snapshot_details(snapshot: PriceSnapshot) -> dict[str, Any]:
+    normalized = _load_json(snapshot.normalized_json)
+    return normalized if normalized else {}
+
+
+def _component_payload(snapshot: PriceSnapshot) -> dict[str, Any]:
+    details = _snapshot_details(snapshot)
+    source_name = snapshot.source_name or details.get("source_name")
+    source_status = details.get("source_status")
+    provider = _provider_label(snapshot)
+    payload = {
+        "component_type": snapshot.quote_type,
+        "component_type_label": QUOTE_TYPE_LABELS.get(snapshot.quote_type, snapshot.quote_type.replace("_", " ").title()),
+        "provider": provider,
+        "provider_code": details.get("provider_code"),
+        "source_name": source_name or "Unknown source",
+        "source_name_label": _source_name_label(source_name),
+        "source_result_id": snapshot.source_result_id,
+        "source_url": snapshot.source_url,
+        "search_reference_url": details.get("search_reference_url"),
+        "link_type": details.get("link_type") or ("exact_source" if snapshot.source_url else ("search_reference" if details.get("search_reference_url") else "none")),
+        "link_label": details.get("link_label") or ("View source price" if snapshot.source_url else ("Search reference" if details.get("search_reference_url") else None)),
+        "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else details.get("captured_at"),
+        "label": snapshot.label,
+        "total_price": snapshot.total_price,
+        "currency": snapshot.currency,
+        "snapshot_id": snapshot.id,
+        "mock": bool(details.get("mock") or source_name == "mock_travel" or source_status == "mock"),
+        "is_mock": bool(details.get("mock") or source_name == "mock_travel" or source_status == "mock"),
+        "source_status": source_status,
+    }
+    for key in (
+        "airline_name",
+        "carrier_code",
+        "chain_code",
+        "flight_numbers",
+        "google_maps_uri",
+        "hotel_name",
+        "itinerary_summary",
+        "rating",
+        "rental_company",
+        "validating_airline_codes",
+        "vehicle_label",
+        "website_uri",
+    ):
+        if details.get(key) is not None:
+            payload[key] = details[key]
+    return payload
+
+
 def _source_links(snapshots: list[PriceSnapshot]) -> list[dict[str, Any]]:
-    links = []
-    for snapshot in snapshots:
-        links.append(
-            {
-                "component_type": snapshot.quote_type,
-                "component_type_label": QUOTE_TYPE_LABELS.get(snapshot.quote_type, snapshot.quote_type.replace("_", " ").title()),
-                "currency": snapshot.currency,
-                "provider": _provider_label(snapshot),
-                "source_name": snapshot.source_name,
-                "source_result_id": snapshot.source_result_id,
-                "source_url": snapshot.source_url,
-                "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
-                "label": snapshot.label,
-                "total_price": snapshot.total_price,
-            }
-        )
-    return links
+    return [_component_payload(snapshot) for snapshot in snapshots]
 
 
 def _provider_label(snapshot: PriceSnapshot) -> str:
@@ -71,20 +121,7 @@ def _provider_label(snapshot: PriceSnapshot) -> str:
 
 
 def _component_summary(snapshot: PriceSnapshot) -> dict[str, Any]:
-    return {
-        "component_type": snapshot.quote_type,
-        "component_type_label": QUOTE_TYPE_LABELS.get(snapshot.quote_type, snapshot.quote_type.replace("_", " ").title()),
-        "provider": _provider_label(snapshot),
-        "label": snapshot.label,
-        "total_price": snapshot.total_price,
-        "currency": snapshot.currency,
-        "source_name": snapshot.source_name or "Unknown provider",
-        "source_result_id": snapshot.source_result_id,
-        "source_url": snapshot.source_url,
-        "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
-        "snapshot_id": snapshot.id,
-        "is_mock": snapshot.source_name == "mock_travel" or (_load_json(snapshot.normalized_json).get("source_status") == "mock"),
-    }
+    return _component_payload(snapshot)
 
 
 def _candidate(

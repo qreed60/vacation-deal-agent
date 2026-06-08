@@ -33,10 +33,10 @@
                     {% for component in components %}
                       <div class="component-row">
                         <span class="component-main">
-                          {{ component.component_type_label }} through {{ component.provider or component.source_name or 'Unknown provider' }}
-                          {% if component.is_mock %}<span class="badge badge-mock">Mock</span>{% endif %}
+                          {{ component.component_type_label }}: {{ component.provider or 'Unknown provider' }} / {{ component.source_name_label or component.source_name or 'Unknown source' }}
+                          {% if component.is_mock %}<span class="badge badge-mock">MOCK</span>{% endif %}
                         </span>
-                        <span class="component-meta">{{ component.label }}</span>
+                        <span class="component-meta">{{ component.label }}{% if component.total_price is not none %} &mdash; {{ component.currency }} {{ '%.2f'|format(component.total_price) }}{% endif %}{% if component.link_url %} &mdash; <a href="{{ component.link_url }}">{{ component.link_label }}</a>{% endif %}</span>
                       </div>
                     {% endfor %}
                   </div>

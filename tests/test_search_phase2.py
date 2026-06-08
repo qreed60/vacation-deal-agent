@@ -92,6 +92,15 @@ def test_mock_search_runner_creates_source_result_rows(session):
     assert [result.result_type for result in results] == ["flight", "hotel", "rental_car"]
     assert all(result.status == "mock" for result in results)
     assert all(json.loads(result.normalized_result_json)["mock"] is True for result in results)
+    normalized = {result.result_type: json.loads(result.normalized_result_json) for result in results}
+    assert normalized["flight"]["provider"] == "Mock Air"
+    assert normalized["flight"]["provider_code"] == "MA"
+    assert normalized["flight"]["search_reference_url"]
+    assert normalized["flight"]["link_label"] == "Search reference"
+    assert normalized["hotel"]["provider"] == "Mock Harbor Hotel"
+    assert normalized["hotel"]["search_reference_url"]
+    assert normalized["rental_car"]["provider"] == "Mock Rent-A-Car"
+    assert normalized["rental_car"]["search_reference_url"]
 
 
 def test_cli_vacation_id_works(session):

@@ -45,10 +45,14 @@ def search(
 
     normalized_results = []
     for item in raw.get("results", []):
+        url = item.get("url")
         normalized_results.append(
             {
                 "title": item.get("title"),
-                "url": item.get("url"),
+                "url": url,
+                "source_url": url,
+                "link_type": "search_reference" if url else "none",
+                "link_label": "Search reference" if url else None,
                 "content": item.get("content") or item.get("snippet"),
                 "engine": item.get("engine"),
                 "source": item.get("source") or item.get("engine"),

@@ -19,6 +19,7 @@ def session(tmp_path, monkeypatch):
     monkeypatch.setenv("SEARXNG_BASE_URL", "")
     monkeypatch.setenv("AMADEUS_ENABLED", "false")
     monkeypatch.setenv("GOOGLE_PLACES_ENABLED", "false")
+    monkeypatch.setenv("SERPAPI_ENABLED", "false")
     SQLModel.metadata.drop_all(get_engine())
     init_db()
     with Session(get_engine()) as db_session:
@@ -65,14 +66,20 @@ def test_real_sources_missing_config_create_skipped_rows(session):
     results = session.exec(select(SourceResult).where(SourceResult.search_run_id == search_run.id)).all()
 
     assert search_run.status == "completed"
-    assert len(results) == 6
+    assert len(results) == 8
     assert {result.status for result in results} == {"skipped"}
-    assert {result.source_name for result in results} == {"searxng", "amadeus", "google_places"}
+    assert {result.source_name for result in results} == {
+        "searxng",
+        "amadeus",
+        "google_places",
+        "serpapi_google_flights",
+        "serpapi_google_hotels",
+    }
     assert all(result.error_message for result in results)
     summary = json.loads(session.get(SearchRun, search_run.id).summary_json)
     assert summary["real_sources"] is True
     assert summary["mock"] is False
-    assert summary["source_status_counts"] == {"skipped": 6}
+    assert summary["source_status_counts"] == {"skipped": 8}
 
 
 def test_phase2_mock_behavior_still_available(session):
@@ -93,6 +100,7 @@ def test_cli_real_sources_skips_without_credentials(session):
     env["SEARXNG_BASE_URL"] = ""
     env["AMADEUS_ENABLED"] = "false"
     env["GOOGLE_PLACES_ENABLED"] = "false"
+    env["SERPAPI_ENABLED"] = "false"
 
     result = subprocess.run(
         [sys.executable, "scripts/run_search_once.py", "--vacation-id", str(vacation.id), "--use-real-sources"],
@@ -106,4 +114,4 @@ def test_cli_real_sources_skips_without_credentials(session):
     assert result.returncode == 0, result.stderr
     assert f"vacation_id={vacation.id}" in result.stdout
     assert "status=completed" in result.stdout
-    assert "source_results=2" in result.stdout
+    assert "source_results=3" in result.stdout

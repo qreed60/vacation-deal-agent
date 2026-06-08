@@ -70,14 +70,17 @@ def test_missing_amadeus_credentials_skip_flight():
 
 def test_flight_offer_normalization():
     raw = {
+        "dictionaries": {"carriers": {"AA": "American Airlines"}},
         "data": [
             {
                 "price": {"grandTotal": "321.10", "currency": "USD"},
+                "validatingAirlineCodes": ["AA"],
                 "itineraries": [
                     {
                         "segments": [
                             {
                                 "carrierCode": "AA",
+                                "number": "100",
                                 "departure": {"iataCode": "PIT"},
                                 "arrival": {"iataCode": "MCO"},
                             }
@@ -95,7 +98,11 @@ def test_flight_offer_normalization():
     assert offer["result_type"] == "flight"
     assert offer["total_price"] == "321.10"
     assert offer["currency"] == "USD"
+    assert offer["carrier_code"] == "AA"
+    assert offer["airline_name"] == "American Airlines"
     assert offer["airline_carrier_codes"] == ["AA"]
+    assert offer["validating_airline_codes"] == ["AA"]
+    assert offer["flight_numbers"] == ["AA 100"]
     assert offer["itinerary_summary"] == "PIT->MCO"
     assert offer["raw_offer_reference"] == raw["data"][0]
 

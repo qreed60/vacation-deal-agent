@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from app.adapters import amadeus, google_places, mock_travel, searxng
+from app.adapters import amadeus, google_places, mock_travel, searxng, serpapi_travel
 from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
 from app.db.session import get_engine
 from app.services.package_builder import build_deal_candidates
@@ -79,10 +79,34 @@ def _run_real_sources(
     statuses.append(_persist_adapter_result(session, search_run_id, "searxng", "web_context", web_query, web_result))
 
     if result_type == "flight":
+        serpapi_query = {"source_name": "serpapi_google_flights", "result_type": "flight", "query": query}
+        serpapi_result = serpapi_travel.search_google_flights(
+            query,
+            enabled=config.serpapi_enabled,
+            api_key=config.serpapi_api_key,
+            base_url=config.serpapi_base_url,
+            timeout_seconds=config.serpapi_timeout_seconds,
+        )
+        statuses.append(
+            _persist_adapter_result(session, search_run_id, "serpapi_google_flights", "flight", serpapi_query, serpapi_result)
+        )
+
         flight_query = {"source_name": "amadeus", "result_type": "flight", "query": query}
         flight_result = amadeus_client.flight_offers_search(query)
         statuses.append(_persist_adapter_result(session, search_run_id, "amadeus", "flight", flight_query, flight_result))
     elif result_type == "hotel":
+        serpapi_query = {"source_name": "serpapi_google_hotels", "result_type": "hotel", "query": query}
+        serpapi_result = serpapi_travel.search_google_hotels(
+            query,
+            enabled=config.serpapi_enabled,
+            api_key=config.serpapi_api_key,
+            base_url=config.serpapi_base_url,
+            timeout_seconds=config.serpapi_timeout_seconds,
+        )
+        statuses.append(
+            _persist_adapter_result(session, search_run_id, "serpapi_google_hotels", "hotel", serpapi_query, serpapi_result)
+        )
+
         hotel_query = {"source_name": "amadeus", "result_type": "hotel", "query": {**query, "operation": "hotel_list"}}
         hotel_result = amadeus_client.hotel_list_search(query)
         statuses.append(_persist_adapter_result(session, search_run_id, "amadeus", "hotel", hotel_query, hotel_result))
@@ -111,6 +135,19 @@ def _run_real_sources(
         statuses.append(
             _persist_adapter_result(session, search_run_id, "google_places", "place_enrichment", places_query, places_result)
         )
+    elif result_type == "rental_car":
+        skipped = {
+            "status": "skipped",
+            "normalized_result": {
+                "source_name": "structured_rental_car",
+                "result_type": "rental_car",
+                "reason": "No configured structured rental car price source is available",
+            },
+            "raw_result": {},
+            "error_message": "No configured structured rental car price source is available",
+        }
+        rental_query = {"source_name": "structured_rental_car", "result_type": "rental_car", "query": query}
+        statuses.append(_persist_adapter_result(session, search_run_id, "structured_rental_car", "rental_car", rental_query, skipped))
 
     return statuses
 
@@ -288,7 +325,7 @@ def deal_candidates_for_vacation(session: Session, vacation_id: int) -> list[Dea
             candidate.score if candidate.score is not None else float("inf"),
             candidate.total_price is None,
             candidate.total_price if candidate.total_price is not None else float("inf"),
-            candidate.id or 0,
+            -(candidate.id or 0),
         ),
     )
 
@@ -299,7 +336,7 @@ def best_deal_for_vacation(session: Session, vacation_id: int) -> DealCandidate 
         .where(DealCandidate.vacation_id == vacation_id)
         .where(DealCandidate.status == "valid")
         .where(DealCandidate.score.is_not(None))
-        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.asc())
+        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.desc())
         .limit(1)
     ).all()
     return candidates[0] if candidates else None
@@ -311,7 +348,7 @@ def best_deal_for_run(session: Session, search_run_id: int) -> DealCandidate | N
         .where(DealCandidate.search_run_id == search_run_id)
         .where(DealCandidate.status == "valid")
         .where(DealCandidate.score.is_not(None))
-        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.asc())
+        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.desc())
         .limit(1)
     ).all()
     return candidates[0] if candidates else None

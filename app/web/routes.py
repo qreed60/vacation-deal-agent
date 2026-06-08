@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
-from app.db.models import DealCandidate, PriceSnapshot, SearchRun, Vacation
+from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation
 from app.db.session import get_session
 from app.services.manifest_io import (
     ManifestValidationError,
@@ -23,21 +23,222 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
 
 
+SOURCE_NAME_LABELS = {
+    "amadeus": "Amadeus",
+    "google_places": "Google Places",
+    "mock_travel": "mock_travel",
+    "searxng": "SearXNG",
+    "serpapi_google_flights": "SerpAPI Google Flights",
+    "serpapi_google_hotels": "SerpAPI Google Hotels",
+    "structured_rental_car": "Structured rental car",
+}
+
+COMPONENT_TYPE_LABELS = {
+    "flight": "Airfare",
+    "hotel": "Hotel",
+    "rental_car": "Rental car",
+    "package": "Package",
+}
+
+
 def redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
 
 
-def component_summary_for_deal(deal: DealCandidate | None) -> list[dict]:
-    if deal is None:
+def safe_json_dict(value: str | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def safe_json_list(value: str | None) -> list:
+    if not value:
         return []
     try:
-        normalized = json.loads(deal.normalized_result_json or "{}")
-    except json.JSONDecodeError:
-        normalized = {}
-    components = normalized.get("component_summary") if isinstance(normalized, dict) else []
-    if not isinstance(components, list):
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
         return []
-    return [component for component in components if isinstance(component, dict)]
+    return parsed if isinstance(parsed, list) else []
+
+
+def _component_type_label(component_type: str | None, fallback: str | None = None) -> str:
+    if fallback:
+        return str(fallback)
+    if not component_type:
+        return "Package"
+    return COMPONENT_TYPE_LABELS.get(component_type, component_type.replace("_", " ").title())
+
+
+def _display_price(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_component_value(component: dict, keys: list[str]) -> str | None:
+    for key in keys:
+        value = component.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _provider_for_component(component: dict) -> str:
+    source_name = component.get("source_name")
+    provider = _first_component_value(
+        component,
+        [
+            "provider",
+            "airline_name",
+            "carrier_code",
+            "provider_code",
+            "hotel_name",
+            "rental_company",
+            "source_name",
+        ],
+    )
+    return provider or (str(source_name) if source_name else "Unknown provider")
+
+
+def _link_context(component: dict) -> tuple[str, str | None, str | None]:
+    link_type = component.get("link_type")
+    source_url = component.get("source_url")
+    search_reference_url = component.get("search_reference_url") or component.get("google_maps_uri") or component.get("website_uri")
+    if link_type == "exact_source" and source_url:
+        return "exact_source", "View source price", str(source_url)
+    if link_type == "search_reference" and search_reference_url:
+        return "search_reference", "Search reference", str(search_reference_url)
+    if source_url:
+        return "exact_source", "View source price", str(source_url)
+    if search_reference_url:
+        return "search_reference", "Search reference", str(search_reference_url)
+    return "none", None, None
+
+
+def _raw_component_candidates(deal: DealCandidate) -> list[dict]:
+    normalized = safe_json_dict(deal.normalized_result_json)
+    for key in ("component_summary", "components"):
+        components = normalized.get(key)
+        if isinstance(components, list) and components:
+            return [component for component in components if isinstance(component, dict)]
+    return [component for component in safe_json_list(deal.source_links_json) if isinstance(component, dict)]
+
+
+def component_display_rows_for_candidate(deal: DealCandidate | None) -> list[dict]:
+    if deal is None:
+        return []
+    display_components: list[dict] = []
+    for component in _raw_component_candidates(deal):
+        component_type = component.get("component_type") or component.get("quote_type") or component.get("result_type")
+        raw_source_name = component.get("source_name")
+        source_name = raw_source_name or "unknown"
+        total_price = _display_price(component.get("total_price"))
+        currency = component.get("currency") or ("USD" if total_price is not None else None)
+        provider = _provider_for_component(component)
+        link_type, link_label, display_url = _link_context(component)
+        display_component = {
+            "airline_name": component.get("airline_name"),
+            "captured_at": component.get("captured_at"),
+            "component_type": component_type or "package",
+            "component_type_label": _component_type_label(component_type, component.get("component_type_label")),
+            "currency": currency,
+            "google_maps_uri": component.get("google_maps_uri"),
+            "is_mock": bool(component.get("is_mock") or component.get("mock") or source_name == "mock_travel"),
+            "link_label": link_label,
+            "link_type": link_type,
+            "link_url": display_url,
+            "label": component.get("label") or component.get("itinerary_summary") or component.get("vehicle_label") or "",
+            "provider": provider,
+            "provider_code": component.get("provider_code") or component.get("carrier_code") or component.get("chain_code"),
+            "rating": component.get("rating"),
+            "source_name": source_name,
+            "source_name_label": component.get("source_name_label") or SOURCE_NAME_LABELS.get(source_name, source_name),
+            "source_result_id": component.get("source_result_id"),
+            "source_url": component.get("source_url"),
+            "search_reference_url": component.get("search_reference_url"),
+            "total_price": total_price,
+            "vehicle_label": component.get("vehicle_label"),
+            "website_uri": component.get("website_uri"),
+        }
+        display_components.append(display_component)
+    return display_components
+
+
+def component_summary_for_deal(deal: DealCandidate | None) -> list[dict]:
+    return component_display_rows_for_candidate(deal)
+
+
+def debug_json(value: str | None, fallback) -> str:
+    if isinstance(fallback, list):
+        parsed = safe_json_list(value)
+    else:
+        parsed = safe_json_dict(value)
+    return json.dumps(parsed, indent=2)
+
+
+def _source_payloads(normalized: dict) -> list[dict]:
+    result_type = normalized.get("result_type")
+    if result_type == "flight":
+        offers = normalized.get("offers")
+        return offers if isinstance(offers, list) else [normalized]
+    if result_type == "hotel":
+        hotels = normalized.get("hotels")
+        return hotels if isinstance(hotels, list) else [normalized]
+    if result_type == "rental_car":
+        cars = normalized.get("cars") or normalized.get("offers")
+        return cars if isinstance(cars, list) else [normalized]
+    if result_type == "web_context":
+        results = normalized.get("results")
+        return results if isinstance(results, list) else []
+    if result_type == "place_enrichment":
+        if isinstance(normalized.get("places"), list):
+            return normalized["places"]
+        return [normalized["place"]] if isinstance(normalized.get("place"), dict) else []
+    return [normalized] if normalized else []
+
+
+def source_result_display_rows(result: SourceResult) -> list[dict]:
+    normalized = safe_json_dict(result.normalized_result_json)
+    rows: list[dict] = []
+    for payload in _source_payloads(normalized):
+        if not isinstance(payload, dict):
+            continue
+        component_type = payload.get("component_type") or payload.get("quote_type") or payload.get("result_type") or result.result_type
+        source_name = payload.get("source_name") or result.source_name or "unknown"
+        total_price = _display_price(payload.get("total_price"))
+        currency = payload.get("currency") or ("USD" if total_price is not None else None)
+        row_payload = {**payload, "source_name": source_name, "source_result_id": result.id}
+        link_type, link_label, display_url = _link_context(row_payload)
+        rows.append(
+            {
+                "component_type": component_type,
+                "component_type_label": _component_type_label(component_type, payload.get("component_type_label")),
+                "provider": _provider_for_component(row_payload),
+                "source_name": source_name,
+                "source_name_label": SOURCE_NAME_LABELS.get(source_name, source_name),
+                "source_result_id": result.id,
+                "status": result.status,
+                "mock": bool(payload.get("mock") or result.status == "mock" or source_name == "mock_travel"),
+                "label": payload.get("label") or payload.get("title") or payload.get("display_name") or payload.get("hotel_name") or payload.get("itinerary_summary") or "",
+                "total_price": total_price,
+                "currency": currency,
+                "link_type": link_type,
+                "link_label": link_label,
+                "link_url": display_url,
+            }
+        )
+    return rows
+
+
+def source_result_display_by_id(results: list[SourceResult]) -> dict[int, list[dict]]:
+    return {result.id: source_result_display_rows(result) for result in results if result.id is not None}
 
 
 def component_summary_by_deal_id(deals: list[DealCandidate]) -> dict[int, list[dict]]:
@@ -237,8 +438,9 @@ def search_run_detail(search_run_id: int, request: Request, session: Session = D
             "search_run": search_run,
             "vacation": vacation,
             "source_results": source_results,
-            "search_plan": json.dumps(json.loads(search_run.search_plan_json or "{}"), indent=2),
-            "summary": json.dumps(json.loads(search_run.summary_json or "{}"), indent=2),
+            "source_result_display_by_id": source_result_display_by_id(source_results),
+            "search_plan": debug_json(search_run.search_plan_json, {}),
+            "summary": debug_json(search_run.summary_json, {}),
         },
     )
 
@@ -273,10 +475,10 @@ def deal_detail(deal_candidate_id: int, request: Request, session: Session = Dep
             "deal": deal,
             "components": component_summary_for_deal(deal),
             "vacation": vacation,
-            "component_snapshot_ids": json.dumps(json.loads(deal.component_snapshot_ids_json or "[]"), indent=2),
-            "source_links": json.dumps(json.loads(deal.source_links_json or "[]"), indent=2),
-            "score_breakdown": json.dumps(json.loads(deal.score_breakdown_json or "{}"), indent=2),
-            "normalized_result": json.dumps(json.loads(deal.normalized_result_json or "{}"), indent=2),
+            "component_snapshot_ids": debug_json(deal.component_snapshot_ids_json, []),
+            "source_links": debug_json(deal.source_links_json, []),
+            "score_breakdown": debug_json(deal.score_breakdown_json, {}),
+            "normalized_result": debug_json(deal.normalized_result_json, {}),
         },
     )
 

@@ -29,6 +29,9 @@ def _normalize_place(place: dict[str, Any]) -> dict[str, Any]:
         "user_rating_count": place.get("userRatingCount"),
         "google_maps_uri": place.get("googleMapsUri"),
         "website_uri": place.get("websiteUri"),
+        "search_reference_url": place.get("googleMapsUri") or place.get("websiteUri"),
+        "link_type": "search_reference" if place.get("googleMapsUri") or place.get("websiteUri") else "none",
+        "link_label": "Search reference" if place.get("googleMapsUri") or place.get("websiteUri") else None,
     }
 
 

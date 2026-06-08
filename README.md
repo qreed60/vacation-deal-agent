@@ -80,6 +80,10 @@ by git and should not be committed.
 - `GOOGLE_PLACES_ENABLED`
 - `GOOGLE_PLACES_API_KEY`
 - `GOOGLE_PLACES_TIMEOUT_SECONDS`
+- `SERPAPI_ENABLED`
+- `SERPAPI_API_KEY`
+- `SERPAPI_BASE_URL`
+- `SERPAPI_TIMEOUT_SECONDS`
 
 ## Phase 1 Scope
 
@@ -139,6 +143,7 @@ Implemented:
 - Amadeus flight offer search adapter
 - Amadeus hotel list and hotel offer lookup adapters
 - Basic Google Places Text Search and Place Details normalization
+- Optional SerpAPI Google Flights and Google Hotels adapter for structured broad flight/hotel price results
 - Real-source integration in the existing Phase 2 search runner
 - CLI flags for `--use-real-sources` and `--use-mock`
 - Source statuses: `completed`, `skipped`, `error`, and `mock`
@@ -169,11 +174,20 @@ Implemented:
 - Deal list and deal detail pages
 - Vacation price history page with a simple SVG graph
 - Search-run summaries with priced snapshot count, deal candidate count, and best deal metadata
+- Provider/source/link metadata normalized into quote snapshots, deal candidates, deal pages, and search-run detail pages
+- Exact source links are shown only when the upstream source provides a specific source/deep URL
+- Generated fallback links are labeled `Search reference`, not exact booking or exact-price links
+- Amadeus airfare coverage is not a complete broad-airline source; broader airline coverage may require future source adapters
+- Generic SearXNG links are not considered sufficient priced travel quotes
+- SerpAPI Google Flights and Google Hotels can be enabled as optional real priced sources
+- Rental car broad pricing still requires a structured source adapter; generic links are not used to fabricate rental car prices
 
 Source-grounding rules:
 
 - Deal and quote rows are created only from `source_result.normalized_result_json` or clearly marked mock data.
 - Unpriced source results are not scored and no prices are fabricated.
+- SearXNG web/context results can provide reference/source links, but arbitrary snippets are not treated as authoritative price records.
+- Search reference links are not exact price guarantees.
 - Mock hotel nightly prices and rental-car daily prices are converted to totals only from the vacation's own date span or target nights.
 - Skipped and error source results remain stored as `source_result` rows.
 
@@ -188,3 +202,4 @@ Out of scope for Phase 4:
 - Booking, purchase, or payment flows
 - Browser scraping
 - New real source integrations beyond the existing Phase 3 adapters
+- Notifications and periodic automation until Phase 5

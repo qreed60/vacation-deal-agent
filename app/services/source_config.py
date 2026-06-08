@@ -56,6 +56,10 @@ class SourceConfig:
     google_places_enabled: bool
     google_places_api_key: str
     google_places_timeout_seconds: float
+    serpapi_enabled: bool
+    serpapi_api_key: str
+    serpapi_base_url: str
+    serpapi_timeout_seconds: float
 
 
 def load_source_config() -> SourceConfig:
@@ -70,4 +74,8 @@ def load_source_config() -> SourceConfig:
         google_places_enabled=env_bool("GOOGLE_PLACES_ENABLED", False),
         google_places_api_key=env_value("GOOGLE_PLACES_API_KEY", "").strip(),
         google_places_timeout_seconds=env_float("GOOGLE_PLACES_TIMEOUT_SECONDS", 8.0),
+        serpapi_enabled=env_bool("SERPAPI_ENABLED", False),
+        serpapi_api_key=env_value("SERPAPI_API_KEY", "").strip(),
+        serpapi_base_url=env_value("SERPAPI_BASE_URL", "https://serpapi.com/search").strip(),
+        serpapi_timeout_seconds=env_float("SERPAPI_TIMEOUT_SECONDS", 8.0),
     )

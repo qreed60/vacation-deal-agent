@@ -33,42 +33,51 @@
     {% if components %}
       <div class="component-detail-list">
         {% for component in components %}
-          <div class="component-detail-row">
-            <div>
-              <p style="margin:0; font-weight:700; color:var(--text-heading);">
-                {{ component.component_type_label }} through {{ component.provider or component.source_name or 'Unknown provider' }}
-                {% if component.is_mock %}<span class="badge badge-mock">Mock</span>{% endif %}
-              </p>
-              <p style="margin:0.25rem 0 0; color:var(--text-muted);">{{ component.label }}</p>
-              <p style="margin:0.25rem 0 0; color:var(--text-muted);">Source: {{ component.source_name or 'Unknown provider' }}{% if component.source_result_id %} · result #{{ component.source_result_id }}{% endif %}</p>
-              {% if component.source_url %}
-                <p style="margin:0.25rem 0 0;"><a href="{{ component.source_url }}">{{ component.source_url }}</a></p>
-              {% endif %}
-              {% if component.captured_at %}
-                <p style="margin:0.25rem 0 0; color:var(--text-muted);">Captured {{ component.captured_at }}</p>
+          <article class="component-detail-card">
+            <div class="component-detail-card-header">
+              <div>
+                <p class="component-kicker">{{ component.component_type_label }}</p>
+                <h4 class="component-provider">
+                  {{ component.provider or 'Unknown provider' }}
+                  {% if component.provider_code %}<span class="component-code">{{ component.provider_code }}</span>{% endif %}
+                  {% if component.is_mock %}<span class="badge badge-mock">MOCK</span>{% endif %}
+                </h4>
+              </div>
+              <div class="component-price">
+                {% if component.total_price is not none %}{{ component.currency }} {{ '%.2f'|format(component.total_price) }}{% else %}-{% endif %}
+              </div>
+            </div>
+            <div class="component-detail-meta">
+              {% if component.label %}<span>{{ component.label }}</span>{% endif %}
+              <span>Source: {{ component.source_name_label or component.source_name or 'Unknown source' }}</span>
+              {% if component.source_result_id %}<span>Result #{{ component.source_result_id }}</span>{% endif %}
+              {% if component.captured_at %}<span>Captured {{ component.captured_at }}</span>{% endif %}
+              {% if component.rating %}<span>Rating {{ component.rating }}</span>{% endif %}
+              {% if component.vehicle_label %}<span>{{ component.vehicle_label }}</span>{% endif %}
+            </div>
+            <div class="component-links">
+              {% if component.link_url %}
+                <a href="{{ component.link_url }}">{{ component.link_label }}</a>
               {% endif %}
             </div>
-            <div class="component-price">
-              {% if component.total_price is not none %}{{ component.currency }} {{ '%.2f'|format(component.total_price) }}{% else %}-{% endif %}
-            </div>
-          </div>
+          </article>
         {% endfor %}
       </div>
     {% else %}
       <p>No component breakdown is available.</p>
     {% endif %}
 
-    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Source links</h3>
-    <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ source_links }}</pre></div>
-
-    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Component snapshot IDs</h3>
-    <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ component_snapshot_ids }}</pre></div>
-
-    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Score breakdown</h3>
-    <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ score_breakdown }}</pre></div>
-
-    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Normalized JSON</h3>
-    <div class="manifest-block"><pre>{{ normalized_result }}</pre></div>
+    <details class="debug-details">
+      <summary>Debug JSON</summary>
+      <h3>Source links</h3>
+      <div class="manifest-block"><pre>{{ source_links }}</pre></div>
+      <h3>Component snapshot IDs</h3>
+      <div class="manifest-block"><pre>{{ component_snapshot_ids }}</pre></div>
+      <h3>Score breakdown</h3>
+      <div class="manifest-block"><pre>{{ score_breakdown }}</pre></div>
+      <h3>Normalized JSON</h3>
+      <div class="manifest-block"><pre>{{ normalized_result }}</pre></div>
+    </details>
   </div>
 </section>
 {% endblock %}

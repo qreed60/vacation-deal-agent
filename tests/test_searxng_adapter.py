@@ -54,6 +54,9 @@ def test_searxng_search_normalizes_results(monkeypatch):
     normalized = result["normalized_result"]["results"][0]
     assert normalized["title"] == "Result"
     assert normalized["url"] == "https://example.test/result"
+    assert normalized["source_url"] == "https://example.test/result"
+    assert normalized["link_type"] == "search_reference"
+    assert normalized["link_label"] == "Search reference"
     assert normalized["content"] == "Snippet"
     assert normalized["engine"] == "test_engine"
 

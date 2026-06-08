@@ -186,9 +186,11 @@ def normalize_flight_offers(
     return_date: str | None = None,
 ) -> dict[str, Any]:
     offers = []
+    carrier_names = raw.get("dictionaries", {}).get("carriers", {})
     for offer in raw.get("data", []):
         itineraries = offer.get("itineraries", [])
         carriers: list[str] = []
+        flight_numbers: list[str] = []
         summaries: list[str] = []
         for itinerary in itineraries:
             segments = itinerary.get("segments", [])
@@ -197,11 +199,18 @@ def normalize_flight_offers(
                 carrier = segment.get("carrierCode")
                 if carrier and carrier not in carriers:
                     carriers.append(carrier)
+                number = segment.get("number")
+                if carrier and number:
+                    flight_number = f"{carrier} {number}"
+                    if flight_number not in flight_numbers:
+                        flight_numbers.append(flight_number)
                 dep = segment.get("departure", {})
                 arr = segment.get("arrival", {})
                 segment_labels.append(f"{dep.get('iataCode', '')}->{arr.get('iataCode', '')}".strip("->"))
             summaries.append(" / ".join(segment_labels))
         price = offer.get("price", {})
+        carrier_code = carriers[0] if carriers else None
+        validating_codes = offer.get("validatingAirlineCodes")
         offers.append(
             {
                 "source_name": "amadeus",
@@ -212,7 +221,11 @@ def normalize_flight_offers(
                 "destination": destination,
                 "departure_date": departure_date,
                 "return_date": return_date,
+                "carrier_code": carrier_code,
+                "airline_name": carrier_names.get(carrier_code) if carrier_code and isinstance(carrier_names, dict) else None,
                 "airline_carrier_codes": carriers,
+                "validating_airline_codes": validating_codes if isinstance(validating_codes, list) else [],
+                "flight_numbers": flight_numbers,
                 "itinerary_summary": " | ".join(summary for summary in summaries if summary),
                 "raw_offer_reference": offer,
             }
@@ -234,6 +247,7 @@ def normalize_hotel_list(
                 "result_type": "hotel",
                 "hotel_id": hotel.get("hotelId"),
                 "hotel_name": hotel.get("name"),
+                "chain_code": hotel.get("chainCode"),
                 "location": {"latitude": geo.get("latitude"), "longitude": geo.get("longitude")},
                 "total_price": None,
                 "currency": None,
@@ -264,6 +278,7 @@ def normalize_hotel_offers(
                 "result_type": "hotel",
                 "hotel_id": hotel.get("hotelId"),
                 "hotel_name": hotel.get("name"),
+                "chain_code": hotel.get("chainCode"),
                 "location": {
                     "latitude": (hotel.get("geoCode") or {}).get("latitude"),
                     "longitude": (hotel.get("geoCode") or {}).get("longitude"),
@@ -273,6 +288,7 @@ def normalize_hotel_offers(
                 "check_in": check_in or first_offer.get("checkInDate"),
                 "check_out": check_out or first_offer.get("checkOutDate"),
                 "room_offer_summary": room.get("description", {}).get("text") or room.get("typeEstimated", {}).get("category"),
+                "source_url": first_offer.get("self") or first_offer.get("url"),
                 "raw_hotel_reference": hotel,
                 "raw_offer_reference": first_offer,
             }

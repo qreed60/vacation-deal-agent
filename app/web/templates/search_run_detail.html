@@ -122,6 +122,7 @@
     {% if source_results %}
       {% for result in source_results %}
         {% set status_class = 'source-card-' + result.status %}
+        {% set display_rows = source_result_display_by_id.get(result.id, []) %}
         <div class="source-card {{ status_class }}">
           <div class="source-card-header">
             <p class="source-card-title">{{ result.result_type }} from {{ result.source_name }}</p>
@@ -143,6 +144,27 @@
           {% if result.error_message %}
             <div style="padding:0.75rem 1rem;">
               <p class="error-msg" style="margin:0;">{{ result.error_message }}</p>
+            </div>
+          {% endif %}
+
+          {% if display_rows %}
+            <div class="source-display-list">
+              {% for row in display_rows %}
+                <div class="source-display-row">
+                  <div>
+                    <p class="component-kicker">{{ row.component_type_label }}</p>
+                    <p class="source-display-provider">
+                      {{ row.provider or 'Unknown provider' }} / {{ row.source_name_label or row.source_name or 'unknown' }}
+                      {% if row.mock %}<span class="badge badge-mock">MOCK</span>{% endif %}
+                    </p>
+                    {% if row.label %}<p class="component-meta">{{ row.label }}</p>{% endif %}
+                    {% if row.link_url %}<p class="component-meta"><a href="{{ row.link_url }}">{{ row.link_label }}</a></p>{% endif %}
+                  </div>
+                  <div class="component-price">
+                    {% if row.total_price is not none %}{{ row.currency }} {{ '%.2f'|format(row.total_price) }}{% else %}-{% endif %}
+                  </div>
+                </div>
+              {% endfor %}
             </div>
           {% endif %}
 
