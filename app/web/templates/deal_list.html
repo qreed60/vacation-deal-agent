@@ -14,6 +14,7 @@
           <tr>
             <th>Deal</th>
             <th>Type</th>
+            <th>Components</th>
             <th>Status</th>
             <th>Total</th>
             <th>Score</th>
@@ -22,9 +23,27 @@
         </thead>
         <tbody>
           {% for deal in deals %}
+            {% set components = deal_components_by_id.get(deal.id, []) %}
             <tr>
               <td data-label="Deal">{{ deal.title }}</td>
               <td data-label="Type">{{ deal.candidate_type }}</td>
+              <td data-label="Components">
+                {% if components %}
+                  <div class="component-list compact">
+                    {% for component in components %}
+                      <div class="component-row">
+                        <span class="component-main">
+                          {{ component.component_type_label }} through {{ component.provider or component.source_name or 'Unknown provider' }}
+                          {% if component.is_mock %}<span class="badge badge-mock">Mock</span>{% endif %}
+                        </span>
+                        <span class="component-meta">{{ component.label }}</span>
+                      </div>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  -
+                {% endif %}
+              </td>
               <td data-label="Status">{{ deal.status }}</td>
               <td data-label="Total">{% if deal.total_price is not none %}{{ deal.currency }} {{ '%.2f'|format(deal.total_price) }}{% else %}-{% endif %}</td>
               <td data-label="Score">{{ deal.score or '-' }}</td>

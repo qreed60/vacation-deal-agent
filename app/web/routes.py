@@ -27,6 +27,23 @@ def redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
 
 
+def component_summary_for_deal(deal: DealCandidate | None) -> list[dict]:
+    if deal is None:
+        return []
+    try:
+        normalized = json.loads(deal.normalized_result_json or "{}")
+    except json.JSONDecodeError:
+        normalized = {}
+    components = normalized.get("component_summary") if isinstance(normalized, dict) else []
+    if not isinstance(components, list):
+        return []
+    return [component for component in components if isinstance(component, dict)]
+
+
+def component_summary_by_deal_id(deals: list[DealCandidate]) -> dict[int, list[dict]]:
+    return {deal.id: component_summary_for_deal(deal) for deal in deals if deal.id is not None}
+
+
 def form_manifest(
     slug: str | None,
     title: str,
@@ -148,6 +165,7 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
         .order_by(SearchRun.created_at.desc())
         .limit(5)
     ).all()
+    best_deal = best_deal_for_vacation(session, vacation_id)
     latest_deals = deal_candidates_for_vacation(session, vacation_id)[:5]
     history = vacation_price_history(session, vacation_id)
     history_rows = history["deals"] or history["snapshots"]
@@ -155,7 +173,9 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
         request,
         "vacation_detail.html",
         {
-            "best_deal": best_deal_for_vacation(session, vacation_id),
+            "best_deal": best_deal,
+            "best_deal_components": component_summary_for_deal(best_deal),
+            "deal_components_by_id": component_summary_by_deal_id(latest_deals),
             "history_points": svg_line_points(history_rows),
             "latest_deals": latest_deals,
             "vacation": vacation,
@@ -228,10 +248,15 @@ def vacation_deals(vacation_id: int, request: Request, session: Session = Depend
     vacation = session.get(Vacation, vacation_id)
     if vacation is None:
         return HTMLResponse("Vacation not found", status_code=404)
+    deals = deal_candidates_for_vacation(session, vacation_id)
     return templates.TemplateResponse(
         request,
         "deal_list.html",
-        {"vacation": vacation, "deals": deal_candidates_for_vacation(session, vacation_id)},
+        {
+            "vacation": vacation,
+            "deals": deals,
+            "deal_components_by_id": component_summary_by_deal_id(deals),
+        },
     )
 
 
@@ -246,6 +271,7 @@ def deal_detail(deal_candidate_id: int, request: Request, session: Session = Dep
         "deal_detail.html",
         {
             "deal": deal,
+            "components": component_summary_for_deal(deal),
             "vacation": vacation,
             "component_snapshot_ids": json.dumps(json.loads(deal.component_snapshot_ids_json or "[]"), indent=2),
             "source_links": json.dumps(json.loads(deal.source_links_json or "[]"), indent=2),

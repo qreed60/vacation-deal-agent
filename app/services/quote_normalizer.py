@@ -47,13 +47,30 @@ def _first_string(payload: dict[str, Any], keys: list[str]) -> str | None:
     return None
 
 
+def _carrier_label(payload: dict[str, Any]) -> str | None:
+    value = payload.get("airline_carrier_codes") or payload.get("carrier_codes")
+    if isinstance(value, list):
+        labels = [str(item) for item in value if item]
+        if labels:
+            return ", ".join(labels)
+    return _first_string(payload, ["airline_carrier_code", "carrier_code", "carrier", "airline"])
+
+
 def _source_url(payload: dict[str, Any]) -> str | None:
     return _first_string(payload, ["source_url", "url", "booking_url", "deep_link", "google_maps_uri", "website_uri"])
 
 
 def _provider(payload: dict[str, Any], source_name: str) -> str | None:
-    provider = _first_string(payload, ["provider", "airline", "hotel_name", "company", "source_name"])
-    return provider or source_name
+    result_type = payload.get("result_type")
+    if result_type == "flight":
+        provider = _first_string(payload, ["provider", "airline", "airline_name"]) or _carrier_label(payload)
+    elif result_type == "hotel":
+        provider = _first_string(payload, ["hotel_name", "provider", "brand", "chain_name"])
+    elif result_type == "rental_car":
+        provider = _first_string(payload, ["rental_company", "company", "company_name", "provider"])
+    else:
+        provider = _first_string(payload, ["provider", "source_name"])
+    return provider or source_name or "Unknown provider"
 
 
 def _label(payload: dict[str, Any], quote_type: str) -> str:
@@ -118,10 +135,18 @@ def snapshots_from_source_result(vacation: Vacation, source_result: SourceResult
         if total is None:
             continue
         currency = str(payload.get("currency") or normalized.get("currency") or "USD")
+        provider = _provider({**payload, "result_type": quote_type}, source_result.source_name)
         source_payload = {
+            "captured_at": captured_at.isoformat() if captured_at else None,
+            "currency": currency,
+            "label": _label(payload, quote_type),
+            "provider": provider,
+            "quote_type": quote_type,
             "source_result_id": source_result.id,
             "source_name": source_result.source_name,
             "source_status": source_result.status,
+            "source_url": _source_url(payload),
+            "total_price": total,
             "quote": payload,
         }
         snapshots.append(
@@ -131,7 +156,7 @@ def snapshots_from_source_result(vacation: Vacation, source_result: SourceResult
                 source_result_id=source_result.id,
                 quote_type=quote_type,
                 source_name=source_result.source_name,
-                provider=_provider(payload, source_result.source_name),
+                provider=provider,
                 label=_label(payload, quote_type),
                 total_price=total,
                 currency=currency,

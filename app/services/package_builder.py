@@ -17,6 +17,13 @@ SERVICE_TO_CANDIDATE = {
     "rental_car": "rental_car_only",
 }
 
+QUOTE_TYPE_LABELS = {
+    "flight": "Airfare",
+    "hotel": "Hotel",
+    "rental_car": "Rental car",
+    "package": "Package",
+}
+
 
 def required_quote_types(vacation: Vacation) -> list[str]:
     required = []
@@ -44,14 +51,40 @@ def _source_links(snapshots: list[PriceSnapshot]) -> list[dict[str, Any]]:
     for snapshot in snapshots:
         links.append(
             {
+                "component_type": snapshot.quote_type,
+                "component_type_label": QUOTE_TYPE_LABELS.get(snapshot.quote_type, snapshot.quote_type.replace("_", " ").title()),
+                "currency": snapshot.currency,
+                "provider": _provider_label(snapshot),
                 "source_name": snapshot.source_name,
                 "source_result_id": snapshot.source_result_id,
                 "source_url": snapshot.source_url,
                 "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
                 "label": snapshot.label,
+                "total_price": snapshot.total_price,
             }
         )
     return links
+
+
+def _provider_label(snapshot: PriceSnapshot) -> str:
+    return snapshot.provider or snapshot.source_name or "Unknown provider"
+
+
+def _component_summary(snapshot: PriceSnapshot) -> dict[str, Any]:
+    return {
+        "component_type": snapshot.quote_type,
+        "component_type_label": QUOTE_TYPE_LABELS.get(snapshot.quote_type, snapshot.quote_type.replace("_", " ").title()),
+        "provider": _provider_label(snapshot),
+        "label": snapshot.label,
+        "total_price": snapshot.total_price,
+        "currency": snapshot.currency,
+        "source_name": snapshot.source_name or "Unknown provider",
+        "source_result_id": snapshot.source_result_id,
+        "source_url": snapshot.source_url,
+        "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
+        "snapshot_id": snapshot.id,
+        "is_mock": snapshot.source_name == "mock_travel" or (_load_json(snapshot.normalized_json).get("source_status") == "mock"),
+    }
 
 
 def _candidate(
@@ -74,6 +107,7 @@ def _candidate(
         "candidate_type": candidate_type,
         "status": status,
         "missing_quote_types": missing_quote_types or [],
+        "component_summary": [_component_summary(snapshot) for snapshot in snapshots],
         "components": [_load_json(snapshot.normalized_json) for snapshot in snapshots],
     }
     return DealCandidate(

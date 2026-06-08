@@ -29,6 +29,35 @@
       </div>
     </dl>
 
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Component breakdown</h3>
+    {% if components %}
+      <div class="component-detail-list">
+        {% for component in components %}
+          <div class="component-detail-row">
+            <div>
+              <p style="margin:0; font-weight:700; color:var(--text-heading);">
+                {{ component.component_type_label }} through {{ component.provider or component.source_name or 'Unknown provider' }}
+                {% if component.is_mock %}<span class="badge badge-mock">Mock</span>{% endif %}
+              </p>
+              <p style="margin:0.25rem 0 0; color:var(--text-muted);">{{ component.label }}</p>
+              <p style="margin:0.25rem 0 0; color:var(--text-muted);">Source: {{ component.source_name or 'Unknown provider' }}{% if component.source_result_id %} · result #{{ component.source_result_id }}{% endif %}</p>
+              {% if component.source_url %}
+                <p style="margin:0.25rem 0 0;"><a href="{{ component.source_url }}">{{ component.source_url }}</a></p>
+              {% endif %}
+              {% if component.captured_at %}
+                <p style="margin:0.25rem 0 0; color:var(--text-muted);">Captured {{ component.captured_at }}</p>
+              {% endif %}
+            </div>
+            <div class="component-price">
+              {% if component.total_price is not none %}{{ component.currency }} {{ '%.2f'|format(component.total_price) }}{% else %}-{% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No component breakdown is available.</p>
+    {% endif %}
+
     <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Source links</h3>
     <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ source_links }}</pre></div>
 

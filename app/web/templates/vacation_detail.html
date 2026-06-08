@@ -102,6 +102,22 @@
         <div>
           <p style="margin:0; font-weight:700; color:var(--text-heading);">{{ best_deal.title }}</p>
           <p style="margin:0.25rem 0 0; color:var(--text-muted);">{{ best_deal.candidate_type | replace('_', ' ') | title }} · score {{ best_deal.score }}</p>
+          {% if best_deal_components %}
+            <div class="component-list">
+              {% for component in best_deal_components %}
+                <div class="component-row">
+                  <span class="component-main">
+                    {{ component.component_type_label }} through {{ component.provider or component.source_name or 'Unknown provider' }}
+                    {% if component.is_mock %}<span class="badge badge-mock">Mock</span>{% endif %}
+                  </span>
+                  <span class="component-meta">
+                    {{ component.label }}
+                    {% if component.total_price is not none %} · {{ component.currency }} {{ '%.2f'|format(component.total_price) }}{% endif %}
+                  </span>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
         </div>
         <div style="text-align:right;">
           <p style="margin:0; font-size:1.35rem; font-weight:800; color:var(--text-heading);">{{ best_deal.currency }} {{ '%.2f'|format(best_deal.total_price) }}</p>
@@ -137,8 +153,18 @@
         </thead>
         <tbody>
           {% for deal in latest_deals %}
+            {% set components = deal_components_by_id.get(deal.id, []) %}
             <tr>
-              <td data-label="Deal">{{ deal.title }}</td>
+              <td data-label="Deal">
+                {{ deal.title }}
+                {% if components %}
+                  <div class="component-inline">
+                    {% for component in components %}
+                      <span>{{ component.component_type_label }}: {{ component.provider or component.source_name or 'Unknown provider' }}{% if component.is_mock %} (mock){% endif %}</span>{% if not loop.last %}; {% endif %}
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </td>
               <td data-label="Status">{{ deal.status }}</td>
               <td data-label="Total">{% if deal.total_price is not none %}{{ deal.currency }} {{ '%.2f'|format(deal.total_price) }}{% else %}-{% endif %}</td>
               <td data-label="Score">{{ deal.score or '-' }}</td>

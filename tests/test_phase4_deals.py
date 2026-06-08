@@ -11,7 +11,7 @@ from app.services.package_builder import build_deal_candidates
 from app.services.quote_normalizer import snapshots_from_source_result
 from app.services.search_planner import deterministic_json
 from app.services.search_runner import run_search_once
-from app.web.routes import price_history_page, vacation_detail
+from app.web.routes import component_summary_for_deal, deal_detail, price_history_page, vacation_detail
 
 
 @pytest.fixture()
@@ -77,7 +77,17 @@ def test_quote_normalizer_extracts_priced_flight_result(session):
         session,
         search_run.id,
         "flight",
-        {"result_type": "flight", "offers": [{"label": "Flight A", "total_price": "321.45", "currency": "USD"}]},
+        {
+            "result_type": "flight",
+            "offers": [
+                {
+                    "label": "Flight A",
+                    "total_price": "321.45",
+                    "currency": "USD",
+                    "airline_carrier_codes": ["DL"],
+                }
+            ],
+        },
     )
 
     snapshots = snapshots_from_source_result(vacation, result)
@@ -86,6 +96,7 @@ def test_quote_normalizer_extracts_priced_flight_result(session):
     assert snapshots[0].quote_type == "flight"
     assert snapshots[0].total_price == 321.45
     assert snapshots[0].label == "Flight A"
+    assert snapshots[0].provider == "DL"
 
 
 def test_quote_normalizer_extracts_priced_hotel_result(session):
@@ -104,6 +115,27 @@ def test_quote_normalizer_extracts_priced_hotel_result(session):
     assert snapshots[0].quote_type == "hotel"
     assert snapshots[0].total_price == 900
     assert snapshots[0].label == "Hotel A"
+    assert snapshots[0].provider == "Hotel A"
+
+
+def test_quote_normalizer_extracts_priced_rental_car_provider(session):
+    vacation = create_vacation(session, hotel_needed=False, airfare_needed=False, rental_car_needed=True)
+    search_run = run_search_once(vacation.id, "manual", session=session, use_mock=False)
+    result = source_result(
+        session,
+        search_run.id,
+        "rental_car",
+        {
+            "result_type": "rental_car",
+            "cars": [{"label": "Compact car", "rental_company": "Enterprise", "total_price": "210", "currency": "USD"}],
+        },
+    )
+
+    snapshots = snapshots_from_source_result(vacation, result)
+
+    assert len(snapshots) == 1
+    assert snapshots[0].quote_type == "rental_car"
+    assert snapshots[0].provider == "Enterprise"
 
 
 def test_unpriced_skipped_error_results_do_not_crash_scoring(session):
@@ -168,8 +200,8 @@ def test_package_builder_creates_package_candidate_when_hotel_and_airfare_availa
     vacation = create_vacation(session, hotel_needed=True, airfare_needed=True)
     search_run = run_search_once(vacation.id, "manual", session=session, use_mock=False)
     snapshots = [
-        PriceSnapshot(vacation_id=vacation.id, search_run_id=search_run.id, quote_type="flight", source_name="unit", label="Flight", total_price=400),
-        PriceSnapshot(vacation_id=vacation.id, search_run_id=search_run.id, quote_type="hotel", source_name="unit", label="Hotel", total_price=700),
+        PriceSnapshot(vacation_id=vacation.id, search_run_id=search_run.id, quote_type="flight", source_name="amadeus", provider="United", label="Flight", total_price=400),
+        PriceSnapshot(vacation_id=vacation.id, search_run_id=search_run.id, quote_type="hotel", source_name="amadeus", provider="Hampton Inn", label="Hotel", total_price=700),
     ]
     for snapshot in snapshots:
         session.add(snapshot)
@@ -183,6 +215,11 @@ def test_package_builder_creates_package_candidate_when_hotel_and_airfare_availa
     assert candidates[0].candidate_type == "package"
     assert candidates[0].status == "valid"
     assert candidates[0].total_price == 1100
+    components = json.loads(candidates[0].normalized_result_json)["component_summary"]
+    assert [(component["component_type_label"], component["provider"]) for component in components] == [
+        ("Airfare", "United"),
+        ("Hotel", "Hampton Inn"),
+    ]
 
 
 def test_scoring_ranks_lower_total_price_better(session):
@@ -218,6 +255,22 @@ def test_vacation_detail_page_displays_best_deal_when_present(session):
 
     assert response.status_code == 200
     assert response.context["best_deal"] is not None
+    assert response.context["best_deal_components"][0]["provider"] == "mock_travel"
+    assert response.context["best_deal_components"][0]["component_type_label"] == "Airfare"
+
+
+def test_deal_detail_context_exposes_component_provider_labels(session):
+    vacation = create_vacation(session, hotel_needed=True, airfare_needed=True)
+    run_search_once(vacation.id, "manual", session=session)
+    deal = session.exec(select(DealCandidate).where(DealCandidate.vacation_id == vacation.id)).first()
+
+    response = deal_detail(deal.id, request=None, session=session)
+
+    assert response.status_code == 200
+    providers = [component["provider"] for component in response.context["components"]]
+    assert providers == ["mock_travel", "mock_travel"]
+    assert all(component["is_mock"] for component in response.context["components"])
+    assert component_summary_for_deal(deal)[0]["source_name"] == "mock_travel"
 
 
 def test_price_history_endpoint_page_returns_graph_data(session):
