@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <div class="card">
+    <div class="detail-header">
+      <h2 class="detail-title">Deal candidate #{{ deal.id }}</h2>
+      {% if vacation %}
+        <a href="/vacations/{{ vacation.id }}/deals" class="btn btn-secondary">Back to deals</a>
+      {% endif %}
+    </div>
+
+    <dl class="info-grid">
+      <div class="info-item">
+        <dt>Type</dt>
+        <dd>{{ deal.candidate_type }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Status</dt>
+        <dd>{{ deal.status }}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Total</dt>
+        <dd>{% if deal.total_price is not none %}{{ deal.currency }} {{ '%.2f'|format(deal.total_price) }}{% else %}-{% endif %}</dd>
+      </div>
+      <div class="info-item">
+        <dt>Score</dt>
+        <dd>{{ deal.score or '-' }}</dd>
+      </div>
+    </dl>
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Source links</h3>
+    <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ source_links }}</pre></div>
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Component snapshot IDs</h3>
+    <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ component_snapshot_ids }}</pre></div>
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Score breakdown</h3>
+    <div class="manifest-block" style="margin-bottom:1.25rem;"><pre>{{ score_breakdown }}</pre></div>
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Normalized JSON</h3>
+    <div class="manifest-block"><pre>{{ normalized_result }}</pre></div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <div class="card">
+    <div class="detail-header">
+      <h2 class="detail-title">Deal candidates for {{ vacation.title }}</h2>
+      <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary">Back to vacation</a>
+    </div>
+
+    {% if deals %}
+      <table class="vacation-table">
+        <thead>
+          <tr>
+            <th>Deal</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Total</th>
+            <th>Score</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for deal in deals %}
+            <tr>
+              <td data-label="Deal">{{ deal.title }}</td>
+              <td data-label="Type">{{ deal.candidate_type }}</td>
+              <td data-label="Status">{{ deal.status }}</td>
+              <td data-label="Total">{% if deal.total_price is not none %}{{ deal.currency }} {{ '%.2f'|format(deal.total_price) }}{% else %}-{% endif %}</td>
+              <td data-label="Score">{{ deal.score or '-' }}</td>
+              <td data-label=""><a href="/deals/{{ deal.id }}" class="btn btn-secondary btn-sm">View</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="runs-empty-state">
+        <p>No deal candidates yet.</p>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

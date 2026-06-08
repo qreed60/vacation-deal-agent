@@ -1,6 +1,6 @@
 # Vacation Deal Agent
 
-Phase 1 backend, Phase 2 mock search foundation, and Phase 3 real-source adapters for tracking vacation manifests.
+Phase 1 backend, Phase 2 mock search foundation, Phase 3 real-source adapters, and Phase 4 source-grounded deal scoring for tracking vacation manifests.
 
 ## Setup
 
@@ -57,6 +57,11 @@ airport/city codes are stored as `source_result` rows with `status="skipped"`.
 Provider failures are stored as `source_result` rows with `status="error"` and
 the error message. The runner does not invent prices, ratings, hotel details, or
 flight details.
+
+After each search run, Phase 4 creates source-grounded `price_snapshot` rows for
+priced quotes and `deal_candidate` rows for scored flight-only, hotel-only,
+rental-car-only, or package candidates. CLI output includes price snapshot count,
+deal candidate count, and the best deal total price when one is available.
 
 ## Source Configuration
 
@@ -149,3 +154,37 @@ Out of scope for Phase 3:
 - LLM summaries
 - Booking, purchase, or payment flows
 - Browser scraping
+
+## Phase 4 Scope
+
+Implemented:
+
+- Normalized flight, hotel, rental-car, and package quote snapshots
+- `price_snapshot` table with source name, source result ID, source URL when available, timestamps, and normalized references
+- `deal_candidate` table with components, source links, deterministic score breakdowns, and normalized candidate JSON
+- Package candidate builder for single-service and multi-service vacations
+- Deterministic scoring where lower total price ranks better
+- Basic penalties for low hotel ratings, high distance values, missing required components, and skipped/error source rows when those fields exist
+- Best deal summary on vacation detail pages
+- Deal list and deal detail pages
+- Vacation price history page with a simple SVG graph
+- Search-run summaries with priced snapshot count, deal candidate count, and best deal metadata
+
+Source-grounding rules:
+
+- Deal and quote rows are created only from `source_result.normalized_result_json` or clearly marked mock data.
+- Unpriced source results are not scored and no prices are fabricated.
+- Mock hotel nightly prices and rental-car daily prices are converted to totals only from the vacation's own date span or target nights.
+- Skipped and error source results remain stored as `source_result` rows.
+
+Out of scope for Phase 4:
+
+- Periodic automation
+- Systemd services or timers
+- Email or text notifications
+- 14/30/90-day low alerts
+- MCP tools
+- LLM summaries
+- Booking, purchase, or payment flows
+- Browser scraping
+- New real source integrations beyond the existing Phase 3 adapters

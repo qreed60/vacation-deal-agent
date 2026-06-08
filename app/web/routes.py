@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
-from app.db.models import SearchRun, Vacation
+from app.db.models import DealCandidate, PriceSnapshot, SearchRun, Vacation
 from app.db.session import get_session
 from app.services.manifest_io import (
     ManifestValidationError,
@@ -15,7 +15,8 @@ from app.services.manifest_io import (
     update_vacation_from_manifest,
     vacation_from_manifest,
 )
-from app.services.search_runner import run_search_once, source_results_for_run
+from app.services.price_history import svg_line_points, vacation_price_history
+from app.services.search_runner import best_deal_for_vacation, deal_candidates_for_vacation, run_search_once, source_results_for_run
 
 
 router = APIRouter()
@@ -147,10 +148,16 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
         .order_by(SearchRun.created_at.desc())
         .limit(5)
     ).all()
+    latest_deals = deal_candidates_for_vacation(session, vacation_id)[:5]
+    history = vacation_price_history(session, vacation_id)
+    history_rows = history["deals"] or history["snapshots"]
     return templates.TemplateResponse(
         request,
         "vacation_detail.html",
         {
+            "best_deal": best_deal_for_vacation(session, vacation_id),
+            "history_points": svg_line_points(history_rows),
+            "latest_deals": latest_deals,
             "vacation": vacation,
             "manifest": json.dumps(manifest, indent=2),
             "recent_runs": recent_runs,
@@ -191,15 +198,77 @@ def search_run_detail(search_run_id: int, request: Request, session: Session = D
         return HTMLResponse("Search run not found", status_code=404)
     vacation = session.get(Vacation, search_run.vacation_id)
     source_results = source_results_for_run(session, search_run_id)
+    price_snapshots = session.exec(
+        select(PriceSnapshot)
+        .where(PriceSnapshot.search_run_id == search_run_id)
+        .order_by(PriceSnapshot.created_at.asc(), PriceSnapshot.id.asc())
+    ).all()
+    deal_candidates = session.exec(
+        select(DealCandidate)
+        .where(DealCandidate.search_run_id == search_run_id)
+        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.asc())
+    ).all()
     return templates.TemplateResponse(
         request,
         "search_run_detail.html",
         {
+            "deal_candidates": deal_candidates,
+            "price_snapshots": price_snapshots,
             "search_run": search_run,
             "vacation": vacation,
             "source_results": source_results,
             "search_plan": json.dumps(json.loads(search_run.search_plan_json or "{}"), indent=2),
             "summary": json.dumps(json.loads(search_run.summary_json or "{}"), indent=2),
+        },
+    )
+
+
+@router.get("/vacations/{vacation_id}/deals", response_class=HTMLResponse)
+def vacation_deals(vacation_id: int, request: Request, session: Session = Depends(get_session)):
+    vacation = session.get(Vacation, vacation_id)
+    if vacation is None:
+        return HTMLResponse("Vacation not found", status_code=404)
+    return templates.TemplateResponse(
+        request,
+        "deal_list.html",
+        {"vacation": vacation, "deals": deal_candidates_for_vacation(session, vacation_id)},
+    )
+
+
+@router.get("/deals/{deal_candidate_id}", response_class=HTMLResponse)
+def deal_detail(deal_candidate_id: int, request: Request, session: Session = Depends(get_session)):
+    deal = session.get(DealCandidate, deal_candidate_id)
+    if deal is None:
+        return HTMLResponse("Deal candidate not found", status_code=404)
+    vacation = session.get(Vacation, deal.vacation_id)
+    return templates.TemplateResponse(
+        request,
+        "deal_detail.html",
+        {
+            "deal": deal,
+            "vacation": vacation,
+            "component_snapshot_ids": json.dumps(json.loads(deal.component_snapshot_ids_json or "[]"), indent=2),
+            "source_links": json.dumps(json.loads(deal.source_links_json or "[]"), indent=2),
+            "score_breakdown": json.dumps(json.loads(deal.score_breakdown_json or "{}"), indent=2),
+            "normalized_result": json.dumps(json.loads(deal.normalized_result_json or "{}"), indent=2),
+        },
+    )
+
+
+@router.get("/vacations/{vacation_id}/price-history", response_class=HTMLResponse)
+def price_history_page(vacation_id: int, request: Request, session: Session = Depends(get_session)):
+    vacation = session.get(Vacation, vacation_id)
+    if vacation is None:
+        return HTMLResponse("Vacation not found", status_code=404)
+    history = vacation_price_history(session, vacation_id)
+    rows = history["deals"] or history["snapshots"]
+    return templates.TemplateResponse(
+        request,
+        "price_history.html",
+        {
+            "vacation": vacation,
+            "history": history,
+            "history_points": svg_line_points(rows),
         },
     )
 

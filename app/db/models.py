@@ -63,3 +63,41 @@ class SourceResult(SQLModel, table=True):
     raw_result_json: str
     error_message: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class PriceSnapshot(SQLModel, table=True):
+    __tablename__ = "price_snapshot"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vacation_id: int = Field(foreign_key="vacation.id", index=True)
+    search_run_id: int = Field(foreign_key="search_run.id", index=True)
+    source_result_id: Optional[int] = Field(default=None, foreign_key="source_result.id", index=True)
+    quote_type: str = Field(index=True)
+    source_name: str
+    provider: Optional[str] = None
+    label: str
+    total_price: Optional[float] = None
+    currency: str = Field(default="USD")
+    source_url: Optional[str] = None
+    normalized_json: str = Field(default="{}")
+    captured_at: datetime = Field(default_factory=utc_now)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class DealCandidate(SQLModel, table=True):
+    __tablename__ = "deal_candidate"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vacation_id: int = Field(foreign_key="vacation.id", index=True)
+    search_run_id: int = Field(foreign_key="search_run.id", index=True)
+    candidate_type: str = Field(index=True)
+    title: str
+    status: str = Field(index=True)
+    total_price: Optional[float] = None
+    currency: str = Field(default="USD")
+    score: Optional[float] = Field(default=None, index=True)
+    score_breakdown_json: str = Field(default="{}")
+    component_snapshot_ids_json: str = Field(default="[]")
+    source_links_json: str = Field(default="[]")
+    normalized_result_json: str = Field(default="{}")
+    created_at: datetime = Field(default_factory=utc_now)

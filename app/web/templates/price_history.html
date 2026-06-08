@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <div class="card">
+    <div class="detail-header">
+      <h2 class="detail-title">Price history for {{ vacation.title }}</h2>
+      <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary">Back to vacation</a>
+    </div>
+
+    {% if history_points %}
+      <svg class="price-chart" viewBox="0 0 640 180" role="img" aria-label="Price history graph">
+        <line x1="24" y1="156" x2="624" y2="156" class="chart-axis"></line>
+        <polyline points="{{ history_points }}" class="chart-line"></polyline>
+      </svg>
+    {% else %}
+      <div class="runs-empty-state" style="padding:1rem; margin-bottom:1.25rem;">
+        <p>No priced history yet.</p>
+      </div>
+    {% endif %}
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:1.25rem 0 0.75rem;">Deal history</h3>
+    {% if history.deals %}
+      <table class="vacation-table" style="margin-bottom:1.25rem;">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Type</th>
+            <th>Label</th>
+            <th>Total</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in history.deals %}
+            <tr>
+              <td data-label="Timestamp">{{ row.timestamp }}</td>
+              <td data-label="Type">{{ row.quote_type }}</td>
+              <td data-label="Label">{{ row.label }}</td>
+              <td data-label="Total">{{ row.currency }} {{ '%.2f'|format(row.total_price) }}</td>
+              <td data-label="Source">{{ row.source_name }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No deal history yet.</p>
+    {% endif %}
+
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:1.25rem 0 0.75rem;">Quote snapshots</h3>
+    {% if history.snapshots %}
+      <table class="vacation-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Type</th>
+            <th>Label</th>
+            <th>Total</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in history.snapshots %}
+            <tr>
+              <td data-label="Timestamp">{{ row.timestamp }}</td>
+              <td data-label="Type">{{ row.quote_type }}</td>
+              <td data-label="Label">{{ row.label }}</td>
+              <td data-label="Total">{{ row.currency }} {{ '%.2f'|format(row.total_price) }}</td>
+              <td data-label="Source">{{ row.source_name }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No quote snapshots yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

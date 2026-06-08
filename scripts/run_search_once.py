@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -34,11 +35,15 @@ def print_run(session: Session, vacation_id: int, *, use_real_sources: bool, use
         use_mock=use_mock,
     )
     source_count = len(source_results_for_run(session, search_run.id))
+    summary = json.loads(search_run.summary_json or "{}")
     print(
         f"run_id={search_run.id} "
         f"vacation_id={search_run.vacation_id} "
         f"status={search_run.status} "
-        f"source_results={source_count}"
+        f"source_results={source_count} "
+        f"price_snapshots={summary.get('priced_snapshot_count', 0)} "
+        f"deal_candidates={summary.get('deal_candidate_count', 0)} "
+        f"best_deal_total_price={summary.get('best_deal_total_price')}"
     )
 
 

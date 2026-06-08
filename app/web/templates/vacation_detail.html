@@ -86,11 +86,68 @@
       <form method="post" action="/vacations/{{ vacation.id }}/search-runs" style="display:inline;">
         <button type="submit" class="btn btn-primary">▶ Run search now</button>
       </form>
+      <a href="/vacations/{{ vacation.id }}/deals" class="btn btn-secondary">Deals</a>
+      <a href="/vacations/{{ vacation.id }}/price-history" class="btn btn-secondary">Price history</a>
       <a href="/vacations/{{ vacation.id }}/export" class="btn btn-secondary">Export manifest</a>
       <form method="post" action="/vacations/{{ vacation.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this vacation?');" style="display:inline;">
         <button type="submit" class="btn btn-danger">Delete</button>
       </form>
     </div>
+
+    <!-- Best Deal -->
+    <div class="section-divider"></div>
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Best deal</h3>
+    {% if best_deal %}
+      <div class="deal-summary">
+        <div>
+          <p style="margin:0; font-weight:700; color:var(--text-heading);">{{ best_deal.title }}</p>
+          <p style="margin:0.25rem 0 0; color:var(--text-muted);">{{ best_deal.candidate_type | replace('_', ' ') | title }} · score {{ best_deal.score }}</p>
+        </div>
+        <div style="text-align:right;">
+          <p style="margin:0; font-size:1.35rem; font-weight:800; color:var(--text-heading);">{{ best_deal.currency }} {{ '%.2f'|format(best_deal.total_price) }}</p>
+          <a href="/deals/{{ best_deal.id }}">View details</a>
+        </div>
+      </div>
+    {% else %}
+      <div class="runs-empty-state" style="padding:1rem;">
+        <p>No priced deal candidates yet.</p>
+      </div>
+    {% endif %}
+
+    {% if history_points %}
+      <h3 style="font-size:1rem; color:var(--text-heading); margin:1.25rem 0 0.75rem;">Price history</h3>
+      <svg class="price-chart" viewBox="0 0 640 180" role="img" aria-label="Price history graph">
+        <line x1="24" y1="156" x2="624" y2="156" class="chart-axis"></line>
+        <polyline points="{{ history_points }}" class="chart-line"></polyline>
+      </svg>
+      <p style="margin:0 0 1.25rem;"><a href="/vacations/{{ vacation.id }}/price-history">View price history data →</a></p>
+    {% endif %}
+
+    {% if latest_deals %}
+      <h3 style="font-size:1rem; color:var(--text-heading); margin:1.25rem 0 0.75rem;">Latest deal candidates</h3>
+      <table class="vacation-table" style="margin-bottom:1.25rem;">
+        <thead>
+          <tr>
+            <th>Deal</th>
+            <th>Status</th>
+            <th>Total</th>
+            <th>Score</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for deal in latest_deals %}
+            <tr>
+              <td data-label="Deal">{{ deal.title }}</td>
+              <td data-label="Status">{{ deal.status }}</td>
+              <td data-label="Total">{% if deal.total_price is not none %}{{ deal.currency }} {{ '%.2f'|format(deal.total_price) }}{% else %}-{% endif %}</td>
+              <td data-label="Score">{{ deal.score or '-' }}</td>
+              <td data-label=""><a href="/deals/{{ deal.id }}" class="btn btn-secondary btn-sm">View</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
 
     <!-- Search Runs -->
     <div class="section-divider"></div>

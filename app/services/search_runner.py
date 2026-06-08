@@ -5,8 +5,10 @@ from typing import Any
 from sqlmodel import Session, select
 
 from app.adapters import amadeus, google_places, mock_travel, searxng
-from app.db.models import SearchRun, SourceResult, Vacation, utc_now
+from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
 from app.db.session import get_engine
+from app.services.package_builder import build_deal_candidates
+from app.services.quote_normalizer import snapshots_from_source_result
 from app.services.search_planner import build_search_plan, deterministic_json
 from app.services.source_config import SourceConfig, load_source_config
 
@@ -176,13 +178,36 @@ def _run_with_session(
                 for status in real_statuses:
                     status_counts[status] = status_counts.get(status, 0) + 1
 
-        completed_at = utc_now()
+        source_results = source_results_for_run(session, search_run.id)
+        price_snapshots: list[PriceSnapshot] = []
+        for source_result in source_results:
+            price_snapshots.extend(snapshots_from_source_result(vacation, source_result))
+        for snapshot in price_snapshots:
+            session.add(snapshot)
+        session.commit()
+        for snapshot in price_snapshots:
+            session.refresh(snapshot)
+
+        deal_candidates = build_deal_candidates(session, vacation, search_run.id, price_snapshots)
+        for candidate in deal_candidates:
+            session.add(candidate)
+        session.commit()
+        for candidate in deal_candidates:
+            session.refresh(candidate)
+
+        best_deal = best_deal_for_run(session, search_run.id)
         search_run.status = "completed"
+        completed_at = utc_now()
         search_run.completed_at = completed_at
         search_run.updated_at = completed_at
         search_run.summary_json = deterministic_json(
             {
+                "best_deal_currency": best_deal.currency if best_deal else None,
+                "best_deal_id": best_deal.id if best_deal else None,
+                "best_deal_total_price": best_deal.total_price if best_deal else None,
+                "deal_candidate_count": len(deal_candidates),
                 "mock": use_mock,
+                "priced_snapshot_count": len(price_snapshots),
                 "real_sources": use_real_sources,
                 "source_result_count": result_count,
                 "source_status_counts": status_counts,
@@ -238,3 +263,55 @@ def source_results_for_run(session: Session, search_run_id: int) -> list[SourceR
         .order_by(SourceResult.created_at.asc(), SourceResult.id.asc())
     )
     return list(session.exec(statement).all())
+
+
+def price_snapshots_for_run(session: Session, search_run_id: int) -> list[PriceSnapshot]:
+    statement = (
+        select(PriceSnapshot)
+        .where(PriceSnapshot.search_run_id == search_run_id)
+        .order_by(PriceSnapshot.created_at.asc(), PriceSnapshot.id.asc())
+    )
+    return list(session.exec(statement).all())
+
+
+def deal_candidates_for_vacation(session: Session, vacation_id: int) -> list[DealCandidate]:
+    statement = (
+        select(DealCandidate)
+        .where(DealCandidate.vacation_id == vacation_id)
+        .order_by(DealCandidate.id.asc())
+    )
+    candidates = list(session.exec(statement).all())
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            candidate.score is None,
+            candidate.score if candidate.score is not None else float("inf"),
+            candidate.total_price is None,
+            candidate.total_price if candidate.total_price is not None else float("inf"),
+            candidate.id or 0,
+        ),
+    )
+
+
+def best_deal_for_vacation(session: Session, vacation_id: int) -> DealCandidate | None:
+    candidates = session.exec(
+        select(DealCandidate)
+        .where(DealCandidate.vacation_id == vacation_id)
+        .where(DealCandidate.status == "valid")
+        .where(DealCandidate.score.is_not(None))
+        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.asc())
+        .limit(1)
+    ).all()
+    return candidates[0] if candidates else None
+
+
+def best_deal_for_run(session: Session, search_run_id: int) -> DealCandidate | None:
+    candidates = session.exec(
+        select(DealCandidate)
+        .where(DealCandidate.search_run_id == search_run_id)
+        .where(DealCandidate.status == "valid")
+        .where(DealCandidate.score.is_not(None))
+        .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.asc())
+        .limit(1)
+    ).all()
+    return candidates[0] if candidates else None
