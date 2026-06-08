@@ -61,7 +61,8 @@
     <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Source results</h3>
     {% if source_results %}
       {% for result in source_results %}
-        <div class="source-card">
+        {% set status_class = 'source-card-' + result.status %}
+        <div class="source-card {{ status_class }}">
           <div class="source-card-header">
             <p class="source-card-title">{{ result.result_type }} from {{ result.source_name }}</p>
             <span class="source-card-meta">
@@ -69,6 +70,10 @@
                 <span class="badge badge-success">Completed</span>
               {% elif result.status == 'error' or result.status == 'failed' %}
                 <span class="badge badge-error">{{ result.status }}</span>
+              {% elif result.status == 'skipped' %}
+                <span class="badge badge-skipped">Skipped</span>
+              {% elif result.status == 'mock' %}
+                <span class="badge badge-mock">Mock</span>
               {% else %}
                 <span class="badge badge-info">{{ result.status }}</span>
               {% endif %}
