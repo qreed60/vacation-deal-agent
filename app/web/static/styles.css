@@ -659,6 +659,37 @@ textarea {
   color: #b91c1c;
 }
 
+/* --- Source Result Status Badges --- */
+.badge-mock {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+.badge-skipped {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+/* --- Source Card Status Variants --- */
+.source-card-completed {
+  border-left: 3px solid var(--color-success);
+}
+
+.source-card-skipped {
+  border-left: 3px solid #94a3b8;
+  background: #f8fafc;
+}
+
+.source-card-error {
+  border-left: 3px solid var(--color-danger);
+  background: #fef2f2;
+}
+
+.source-card-mock {
+  border-left: 3px solid #7c3aed;
+  background: #f5f3ff;
+}
+
 /* --- Source Result Cards --- */
 .source-card {
   border: 1px solid var(--border-color);
