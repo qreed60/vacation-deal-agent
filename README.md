@@ -1,6 +1,6 @@
 # Vacation Deal Agent
 
-Phase 1 backend and Phase 2 mock search foundation for tracking vacation manifests.
+Phase 1 backend, Phase 2 mock search foundation, and Phase 3 real-source adapters for tracking vacation manifests.
 
 ## Setup
 
@@ -26,8 +26,7 @@ python -m pytest
 
 ## Run One Mock Search
 
-Phase 2 search runs use deterministic mock source responses only. They do not call
-SearXNG, Amadeus, Google Places, Duffel, MCP tools, or any external service.
+By default, search runs use deterministic mock source responses only.
 
 Run a mock search for one vacation:
 
@@ -40,6 +39,42 @@ Run once for every active vacation:
 ```bash
 python scripts/run_search_once.py --all-active
 ```
+
+Run configured Phase 3 sources for one vacation:
+
+```bash
+python scripts/run_search_once.py --vacation-id 1 --use-real-sources
+```
+
+Include both real sources and deterministic mock rows:
+
+```bash
+python scripts/run_search_once.py --vacation-id 1 --use-real-sources --use-mock
+```
+
+Real API keys are optional. Disabled sources, missing credentials, and unresolved
+airport/city codes are stored as `source_result` rows with `status="skipped"`.
+Provider failures are stored as `source_result` rows with `status="error"` and
+the error message. The runner does not invent prices, ratings, hotel details, or
+flight details.
+
+## Source Configuration
+
+Configuration is loaded from environment variables or `.env`. `.env` is ignored
+by git and should not be committed.
+
+`.env.example` fields:
+
+- `SEARXNG_BASE_URL` defaults to `http://127.0.0.1:8888`
+- `SEARXNG_TIMEOUT_SECONDS`
+- `AMADEUS_ENABLED`
+- `AMADEUS_BASE_URL`
+- `AMADEUS_CLIENT_ID`
+- `AMADEUS_CLIENT_SECRET`
+- `AMADEUS_TIMEOUT_SECONDS`
+- `GOOGLE_PLACES_ENABLED`
+- `GOOGLE_PLACES_API_KEY`
+- `GOOGLE_PLACES_TIMEOUT_SECONDS`
 
 ## Phase 1 Scope
 
@@ -89,3 +124,28 @@ Out of scope for Phase 2:
 - Systemd services or timers
 - LLM summaries
 - Email or text notifications
+
+## Phase 3 Scope
+
+Implemented:
+
+- SearXNG JSON search adapter
+- Amadeus OAuth2 client credentials configuration and token caching
+- Amadeus flight offer search adapter
+- Amadeus hotel list and hotel offer lookup adapters
+- Basic Google Places Text Search and Place Details normalization
+- Real-source integration in the existing Phase 2 search runner
+- CLI flags for `--use-real-sources` and `--use-mock`
+- Source statuses: `completed`, `skipped`, `error`, and `mock`
+
+Out of scope for Phase 3:
+
+- Deal scoring
+- Price history graphs
+- 14/30/90 day low notifications
+- Periodic automation
+- Systemd services or timers
+- MCP tools
+- LLM summaries
+- Booking, purchase, or payment flows
+- Browser scraping
