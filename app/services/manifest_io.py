@@ -40,6 +40,8 @@ EXPORT_FIELDS = [
     "airfare_needed",
     "rental_car_needed",
     "special_accommodations",
+    "preferred_airports",
+    "alternate_airports",
 ]
 
 
@@ -162,12 +164,16 @@ def normalize_manifest(raw_manifest: dict[str, Any]) -> dict[str, Any]:
         "airfare_needed": parse_bool(raw_manifest.get("airfare_needed"), "airfare_needed"),
         "rental_car_needed": parse_bool(raw_manifest.get("rental_car_needed"), "rental_car_needed"),
         "special_accommodations": str(raw_manifest.get("special_accommodations") or ""),
+        "preferred_airports": normalize_travelers(raw_manifest.get("preferred_airports", raw_manifest.get("preferred_airports_json"))),
+        "alternate_airports": normalize_travelers(raw_manifest.get("alternate_airports", raw_manifest.get("alternate_airports_json"))),
     }
     return manifest
 
 
 def manifest_for_vacation(vacation: Vacation) -> dict[str, Any]:
     travelers = json.loads(vacation.travelers_json or "[]")
+    preferred = json.loads(vacation.preferred_airports_json or "[]")
+    alternate = json.loads(vacation.alternate_airports_json or "[]")
     return {
         "slug": vacation.slug,
         "title": vacation.title,
@@ -186,6 +192,8 @@ def manifest_for_vacation(vacation: Vacation) -> dict[str, Any]:
         "airfare_needed": vacation.airfare_needed,
         "rental_car_needed": vacation.rental_car_needed,
         "special_accommodations": vacation.special_accommodations,
+        "preferred_airports": preferred,
+        "alternate_airports": alternate,
     }
 
 
@@ -217,6 +225,8 @@ def vacation_from_manifest(session: Session, raw_manifest: dict[str, Any]) -> Va
         airfare_needed=manifest["airfare_needed"],
         rental_car_needed=manifest["rental_car_needed"],
         special_accommodations=manifest["special_accommodations"],
+        preferred_airports_json=json.dumps(manifest.get("preferred_airports", [])),
+        alternate_airports_json=json.dumps(manifest.get("alternate_airports", [])),
         manifest_json=snapshot_json(manifest),
     )
     session.add(vacation)
@@ -244,6 +254,8 @@ def update_vacation_from_manifest(session: Session, vacation: Vacation, raw_mani
     vacation.airfare_needed = manifest["airfare_needed"]
     vacation.rental_car_needed = manifest["rental_car_needed"]
     vacation.special_accommodations = manifest["special_accommodations"]
+    vacation.preferred_airports_json = json.dumps(manifest.get("preferred_airports", []))
+    vacation.alternate_airports_json = json.dumps(manifest.get("alternate_airports", []))
     vacation.manifest_json = snapshot_json(manifest)
     vacation.updated_at = utc_now()
     session.add(vacation)

@@ -1,8 +1,69 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+
+# Small fallback city map for known common values.
+_FALLBACK_CITY_MAP: dict[str, str] = {
+    "Pittsburgh, PA": "PIT",
+    "Pittsburgh": "PIT",
+    "Minot, ND": "MOT",
+    "Minot": "MOT",
+    "Orlando, FL": "MCO",
+    "Orlando": "MCO",
+    "Chicago, IL": "ORD",
+    "Chicago": "ORD",
+    "New York, NY": "JFK",
+    "New York": "JFK",
+    "Los Angeles, CA": "LAX",
+    "Los Angeles": "LAX",
+}
+
+
+def _is_iata_code(value: str) -> bool:
+    """Check if a string looks like a 3-letter IATA airport code."""
+    return bool(re.fullmatch(r"[A-Z]{3}", value.strip()))
+
+
+def resolve_airport(raw_value: str, preferred_airports: list | None = None, alternate_airports: list | None = None) -> str | None:
+    """Resolve a raw origin/destination string to an IATA airport code.
+
+    Priority:
+      A. First entry in preferred_airports (if non-empty).
+      B. First entry in alternate_airports (if preferred is empty).
+      C. Raw value if it already looks like an IATA code.
+      D. Fallback city map lookup (case-insensitive).
+      E. None if unresolved.
+
+    Does not guess beyond the fallback map or call external geocoding APIs.
+    """
+    # A. preferred_airports
+    if preferred_airports:
+        first = str(preferred_airports[0]).strip().upper()
+        if _is_iata_code(first):
+            return first
+
+    # B. alternate_airports
+    if alternate_airports:
+        first = str(alternate_airports[0]).strip().upper()
+        if _is_iata_code(first):
+            return first
+
+    # C. Raw value is already IATA
+    stripped = raw_value.strip().upper()
+    if _is_iata_code(stripped):
+        return stripped
+
+    # D. Fallback city map (case-insensitive)
+    for key, code in _FALLBACK_CITY_MAP.items():
+        if raw_value.strip().lower() == key.lower():
+            return code
+
+    # E. Unresolved
+    return None
 
 
 def _load_dotenv(path: Path = Path(".env")) -> dict[str, str]:
@@ -44,6 +105,24 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_int_optional(name: str) -> int | None:
+    value = env_value(name, "").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def env_int(name: str, default: int = 0) -> int:
+    value = env_value(name, str(default)).strip()
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class SourceConfig:
     searxng_base_url: str
@@ -60,6 +139,19 @@ class SourceConfig:
     serpapi_api_key: str
     serpapi_base_url: str
     serpapi_timeout_seconds: float
+    fast_flights_enabled: bool
+    fast_flights_fetch_mode: str
+    fast_flights_seat: str
+    fast_flights_max_stops: int | None
+    fast_flights_max_results: int
+    trvl_enabled: bool
+    trvl_binary_path: str
+    trvl_timeout_seconds: float
+    trvl_max_flight_results: int
+    trvl_max_hotel_results: int
+    trvl_currency: str
+    trvl_allow_risky_flight_offers: bool
+    trvl_require_configured_currency: bool
 
 
 def load_source_config() -> SourceConfig:
@@ -78,4 +170,17 @@ def load_source_config() -> SourceConfig:
         serpapi_api_key=env_value("SERPAPI_API_KEY", "").strip(),
         serpapi_base_url=env_value("SERPAPI_BASE_URL", "https://serpapi.com/search").strip(),
         serpapi_timeout_seconds=env_float("SERPAPI_TIMEOUT_SECONDS", 8.0),
+        fast_flights_enabled=env_bool("FAST_FLIGHTS_ENABLED", False),
+        fast_flights_fetch_mode=env_value("FAST_FLIGHTS_FETCH_MODE", "common").strip(),
+        fast_flights_seat=env_value("FAST_FLIGHTS_SEAT", "economy").strip(),
+        fast_flights_max_stops=env_int_optional("FAST_FLIGHTS_MAX_STOPS"),
+        fast_flights_max_results=int(env_value("FAST_FLIGHTS_MAX_RESULTS", "20")),
+        trvl_enabled=env_bool("TRVL_ENABLED", False),
+        trvl_binary_path=env_value("TRVL_BINARY_PATH", ".tools/trvl/trvl").strip(),
+        trvl_timeout_seconds=env_float("TRVL_TIMEOUT_SECONDS", 120.0),
+        trvl_max_flight_results=int(env_value("TRVL_MAX_FLIGHT_RESULTS", "20")),
+        trvl_max_hotel_results=int(env_value("TRVL_MAX_HOTEL_RESULTS", "20")),
+        trvl_currency=env_value("TRVL_CURRENCY", "USD").strip() or "USD",
+        trvl_allow_risky_flight_offers=env_bool("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", False),
+        trvl_require_configured_currency=env_bool("TRVL_REQUIRE_CONFIGURED_CURRENCY", True),
     )

@@ -7,6 +7,55 @@ from urllib.parse import quote_plus
 
 from app.db.models import PriceSnapshot, SourceResult, Vacation, utc_now
 from app.services.search_planner import deterministic_json
+from app.services.source_config import env_int, env_value
+
+
+DEFAULT_FAST_FLIGHTS_MAX_RESULTS = 20
+
+
+def _deduplicate_flight_offers(offers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate flight offers by provider + price + departure + arrival + label.
+
+    Preserves the first occurrence of each unique combination.
+    """
+    seen: set[tuple] = set()
+    deduped: list[dict[str, Any]] = []
+    for offer in offers:
+        if not isinstance(offer, dict):
+            continue
+        key = (
+            str(offer.get("provider", "") or ""),
+            str(offer.get("total_price") or ""),
+            str(offer.get("departure") or ""),
+            str(offer.get("arrival") or ""),
+            str(offer.get("label") or ""),
+        )
+        if key not in seen:
+            seen.add(key)
+            deduped.append(offer)
+    return deduped
+
+
+def _limit_fast_flights_offers(offers: list[dict[str, Any]], max_results: int | None = None) -> list[dict[str, Any]]:
+    """Limit fast-flights offers to the top N by total_price ascending.
+
+    Deduplicates first, then sorts by price and limits.
+    Preserves all raw/diagnostic data in the normalized result.
+    """
+    if max_results is None:
+        env_val = env_int("FAST_FLIGHTS_MAX_RESULTS", 20)
+        max_results = env_val
+
+    # Deduplicate first
+    deduped = _deduplicate_flight_offers(offers)
+
+    # Sort by total_price ascending (None prices go last)
+    priced = [o for o in deduped if o.get("total_price") is not None]
+    unpriced = [o for o in deduped if o.get("total_price") is None]
+    priced.sort(key=lambda o: float(o["total_price"] or 0))
+
+    limited = priced[:max_results] + unpriced
+    return limited
 
 
 PRICED_STATUSES = {"completed", "mock"}
@@ -223,6 +272,18 @@ def snapshots_from_source_result(vacation: Vacation, source_result: SourceResult
     result_type = normalized.get("result_type") or source_result.result_type
     if result_type not in QUOTE_TYPES:
         return []
+
+    # Apply fast-flights bounding/dedup before creating snapshots
+    if source_result.source_name == "fast_flights" and result_type == "flight":
+        offers = normalized.get("offers", [])
+        if isinstance(offers, list) and len(offers) > 0:
+            max_results = int(env_value("FAST_FLIGHTS_MAX_RESULTS", str(DEFAULT_FAST_FLIGHTS_MAX_RESULTS)))
+            limited_offers = _limit_fast_flights_offers(offers, max_results=max_results)
+            # Update the normalized result with limited offers (preserve raw/diagnostic data)
+            if len(limited_offers) != len(offers):
+                normalized["limited_offer_count"] = len(limited_offers)
+                normalized["original_offer_count"] = len(offers)
+            normalized["offers"] = limited_offers
 
     snapshots: list[PriceSnapshot] = []
     captured_at = source_result.created_at or utc_now()

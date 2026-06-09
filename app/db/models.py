@@ -29,6 +29,8 @@ class Vacation(SQLModel, table=True):
     airfare_needed: bool = True
     rental_car_needed: bool = False
     special_accommodations: str = ""
+    preferred_airports_json: str = Field(default="[]")
+    alternate_airports_json: str = Field(default="[]")
     manifest_json: str
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
