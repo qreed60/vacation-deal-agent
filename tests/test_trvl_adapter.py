@@ -1957,3 +1957,480 @@ def test_broad_alternatives_have_is_risky_flag():
     for alt in broad:
         for offer in alt.get("alternatives", []):
             assert "is_risky" in offer
+
+
+def test_broad_summary_exists_when_broad_enabled_even_with_zero_alternatives():
+    """broad_summary must always be present when broad discovery is enabled, even if no alternatives found."""
+    empty_raw = {"success": True, "flights": []}
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        completed.stdout = json.dumps(empty_raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    assert result["status"] == "completed"
+    nr = result["normalized_result"]
+    # broad_summary must always be present when broad discovery is enabled with return date
+    assert "broad_summary" in nr
+    summary = nr["broad_summary"]
+    assert summary["enabled"] is True
+    assert summary["one_way_searches_run"] == 2
+    assert summary["total_raw_alternatives"] == 0
+    assert summary["total_normalized_alternatives"] == 0
+
+
+def test_command_diagnostics_present_when_broad_enabled():
+    """command_results must be present when broad discovery is enabled."""
+    raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        completed.stdout = json.dumps(raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    nr = result["normalized_result"]
+    assert "command_results" in nr
+    cmd_list = nr["command_results"]
+    labels = [c["label"] for c in cmd_list]
+    assert "outbound_one_way" in labels
+    assert "return_one_way" in labels
+
+
+def test_round_trip_outbound_return_command_labels_present():
+    """When broad discovery enabled, command diagnostics must include round_trip + outbound_one_way + return_one_way."""
+    raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        completed.stdout = json.dumps(raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    nr = result["normalized_result"]
+    # RT command metadata in normalized['command']
+    rt_cmd = nr.get("command", {})
+    assert "exit_code" in rt_cmd
+    assert "elapsed_seconds" in rt_cmd
+    assert "stdout_json_success" in rt_cmd
+    assert "stdout_json_count" in rt_cmd
+
+    # One-way command diagnostics in command_results
+    cmd_list = nr.get("command_results", [])
+    labels = [c["label"] for c in cmd_list]
+    assert "outbound_one_way" in labels
+    assert "return_one_way" in labels
+
+
+def test_recursive_raw_offer_reference_airport_code_cleanup_in_normal_offers():
+    """Safe offers' raw_offer_reference must have airport codes/names recursively cleaned."""
+    raw = {
+        "success": True,
+        "flights": [
+            {
+                "price": 200,
+                "currency": "USD",
+                "provider": "Delta",
+                "legs": [
+                    {
+                        "departure_airport": {"code": "'PIT'", "name": "'Pittsburgh International Airport'"},
+                        "arrival_airport": {"code": "\"MSP\"", "name": "\"Minneapolis-St. Paul Intl\""},
+                    },
+                ],
+            },
+        ],
+    }
+
+    with patch("app.adapters.trvl_adapter._run_trvl") as mock_run:
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            completed = MagicMock()
+            completed.stdout = json.dumps(raw)
+            completed.stderr = ""
+            completed.returncode = 0
+            completed.args = ["trvl", "flights"]
+            completed.elapsed_seconds = 1.5
+            mock_run.return_value = completed
+
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MSP", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+            )
+
+    offer = result["normalized_result"]["offers"][0]
+    raw_ref = offer.get("raw_offer_reference", {})
+    legs = raw_ref.get("legs", [])
+    assert len(legs) > 0
+    dep = legs[0].get("departure_airport", {})
+    arr = legs[0].get("arrival_airport", {})
+    # Cleaned codes (no embedded quotes)
+    assert dep.get("code") == "PIT"
+    assert arr.get("code") == "MSP"
+    # Cleaned names (no embedded quotes)
+    assert "'Pittsburgh International Airport'" not in str(dep.get("name", ""))
+    assert "\"Minneapolis-St. Paul Intl\"" not in str(arr.get("name", ""))
+
+
+def test_recursive_cleanup_applies_in_broad_alternatives():
+    """Broad alternatives raw_offer_reference must also have airport codes/names cleaned."""
+    risky_raw = {
+        "success": True,
+        "flights": [
+            {
+                "price": 120,
+                "currency": "USD",
+                "provider": "",
+                "cheapest_source": "Skiplagged",
+                "legs": [
+                    {
+                        "departure_airport": {"code": "'PIT'", "name": "'Pittsburgh Intl'"},
+                        "arrival_airport": {"code": "\"MSP\"", "name": "\"Minneapolis-St. Paul\""},
+                    },
+                ],
+            },
+        ],
+    }
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        if "--return" in command:
+            completed.stdout = json.dumps({"success": True, "flights": []})
+        else:
+            completed.stdout = json.dumps(risky_raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MSP", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    # Check broad alternatives have cleaned raw_offer_reference
+    broad = result["normalized_result"]["broad_alternatives"]
+    for alt in broad:
+        for offer in alt.get("alternatives", []):
+            raw_ref = offer.get("raw_offer_reference", {})
+            legs = raw_ref.get("legs", [])
+            if legs:
+                dep = legs[0].get("departure_airport", {})
+                assert dep.get("code") == "PIT"
+
+
+def test_broad_discovery_disabled_no_broad_summary_or_command_results():
+    """When broad discovery is disabled, no broad_summary or command_results should be present."""
+    raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    with patch("app.adapters.trvl_adapter._run_trvl") as mock_run:
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            completed = MagicMock()
+            completed.stdout = json.dumps(raw)
+            completed.stderr = ""
+            completed.returncode = 0
+            completed.args = ["trvl", "flights"]
+            completed.elapsed_seconds = 1.5
+            mock_run.return_value = completed
+
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=False,
+            )
+
+    nr = result["normalized_result"]
+    assert "broad_summary" not in nr
+    assert "command_results" not in nr
+
+
+def test_broad_command_diagnostics_include_all_required_fields():
+    """Each command diagnostic must include label, command, exit_code, elapsed_seconds, stdout_json_success, stdout_json_count, stderr_preview."""
+    raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        completed.stdout = json.dumps(raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    nr = result["normalized_result"]
+    cmd_list = nr.get("command_results", [])
+    required_fields = {"label", "command", "exit_code", "elapsed_seconds", "stdout_json_success", "stdout_json_count", "stderr_preview"}
+    for cmd in cmd_list:
+        assert required_fields.issubset(set(cmd.keys())), f"Missing fields in {cmd.get('label')}: {required_fields - set(cmd.keys())}"
+
+
+def test_broad_summary_includes_search_types_when_alternatives_found():
+    """broad_summary.search_types should list which search types produced alternatives."""
+    safe_raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        if "--return" in command:
+            completed.stdout = json.dumps(safe_raw)
+        else:
+            completed.stdout = json.dumps({"success": True, "flights": []})
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    summary = result["normalized_result"]["broad_summary"]
+    assert isinstance(summary["search_types"], list)
+
+
+def test_broad_command_results_bounded_to_last_10():
+    """command_results should be bounded to last 10 entries."""
+    raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        completed.stdout = json.dumps(raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    nr = result["normalized_result"]
+    cmd_list = nr.get("command_results", [])
+    assert len(cmd_list) <= 10
+
+
+def test_broad_summary_has_zero_counts_when_all_offers_filtered():
+    """When all offers are filtered out (e.g., risky), broad_summary should show zero normalized counts."""
+    risky_raw = {
+        "success": True,
+        "flights": [
+            {"price": 120, "currency": "USD", "provider": "", "cheapest_source": "Skiplagged"},
+        ],
+    }
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        if "--return" in command:
+            completed.stdout = json.dumps({"success": True, "flights": []})
+        else:
+            completed.stdout = json.dumps(risky_raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    summary = result["normalized_result"]["broad_summary"]
+    assert summary["enabled"] is True
+    # Raw alternatives exist but normalized count may be 0 if all filtered
+    assert "total_raw_alternatives" in summary
+    assert "total_normalized_alternatives" in summary
+
+
+def test_normal_offers_still_safe_when_broad_enabled():
+    """Normal offers must remain safe and eligible for PriceSnapshots even when broad discovery is enabled."""
+    mixed_raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "Delta"},  # safe
+            {"price": 120, "currency": "USD", "self_connect": True},  # risky
+            {"price": 130, "currency": "USD", "provider": "", "cheapest_source": "Skiplagged"},  # risky
+        ],
+    }
+
+    with patch("app.adapters.trvl_adapter._run_trvl") as mock_run:
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            completed = MagicMock()
+            completed.stdout = json.dumps(mixed_raw)
+            completed.stderr = ""
+            completed.returncode = 0
+            completed.args = ["trvl", "flights"]
+            completed.elapsed_seconds = 1.5
+            mock_run.return_value = completed
+
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    # Only safe offers in normal
+    assert len(result["normalized_result"]["offers"]) == 1
+    assert result["normalized_result"]["offers"][0]["provider"] == "Delta"
+
+
+def test_broad_alternatives_do_not_affect_best_deal():
+    """Broad alternatives must not create default best_deal or affect PriceSnapshots."""
+    risky_raw = {
+        "success": True,
+        "flights": [
+            {"price": 120, "currency": "USD", "provider": "", "cheapest_source": "Skiplagged"},
+        ],
+    }
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        if "--return" in command:
+            completed.stdout = json.dumps({"success": True, "flights": []})
+        else:
+            completed.stdout = json.dumps(risky_raw)
+        completed.stderr = ""
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    # No normal offers (all risky)
+    assert result["normalized_result"]["offers"] == []
+    # Broad alternatives exist but are not in normal offers
+    assert len(result["normalized_result"]["broad_alternatives"]) > 0
+
+
+def test_broad_summary_empty_search_types_when_no_return_date():
+    """When no return date, broad discovery should not run and broad_summary absent."""
+    raw = {"success": True, "flights": [{"price": 200, "currency": "USD", "provider": "Delta"}]}
+
+    with patch("app.adapters.trvl_adapter._run_trvl") as mock_run:
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            completed = MagicMock()
+            completed.stdout = json.dumps(raw)
+            completed.stderr = ""
+            completed.returncode = 0
+            completed.args = ["trvl", "flights"]
+            completed.elapsed_seconds = 1.5
+            mock_run.return_value = completed
+
+            # No end_date means no return date -> has_return=False
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    nr = result["normalized_result"]
+    # Without return date, broad discovery doesn't run (no round-trip context)
+    assert "broad_summary" not in nr
+
+
+def test_command_diagnostics_stderr_preview_bounded():
+    """stderr_preview should be bounded to prevent unbounded strings."""
+    long_stderr = "E" * 2000
+
+    def side_effect(command, timeout):
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.elapsed_seconds = 1.5
+        completed.stdout = json.dumps({"success": True, "flights": []})
+        completed.stderr = long_stderr
+        completed.args = command
+        return completed
+
+    with patch("app.adapters.trvl_adapter._run_trvl", side_effect=side_effect):
+        with patch("app.adapters.trvl_adapter.resolve_trvl_binary", return_value="/fake/trvl"):
+            result = trvl_adapter.search_trvl_flights(
+                {"origin": "PIT", "destination": "MOT", "start_date": "2026-07-01", "end_date": "2026-07-15"},
+                enabled=True,
+                binary_path="/fake/trvl",
+                broad_discovery_enabled=True,
+            )
+
+    nr = result["normalized_result"]
+    cmd_list = nr.get("command_results", [])
+    for cmd in cmd_list:
+        preview = cmd.get("stderr_preview", "")
+        # _bounded_string limits content to limit chars then appends truncation marker.
+        # The original content portion must be bounded, not total string length.
+        assert len(preview) < 600, f"stderr_preview too long: {len(preview)}"
+

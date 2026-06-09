@@ -746,7 +746,7 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
             "link_type": "exact_source" if source_url else "none",
             "link_label": "View source price" if source_url else None,
             "mock": False,
-            "raw_offer_reference": _bounded_public_data(flight, max_depth=3, max_items=12),
+            "raw_offer_reference": _clean_raw_airport_codes(_bounded_public_data(flight, max_depth=3, max_items=12)),
         }
         if traveler_pricing_note:
             offer["traveler_pricing_note"] = traveler_pricing_note
@@ -1027,6 +1027,7 @@ def search_trvl_flights(
     broad_alternatives: list[dict[str, Any]] = []
     broad_summary: dict[str, Any] = {}
     broad_skipped_reasons: list[dict[str, str]] = []
+    broad_command_results: list[dict[str, Any]] = []
 
     if broad_discovery_enabled and has_return:
         # Store full command results (not just stdout/stderr) to avoid double-runs
@@ -1073,6 +1074,17 @@ def search_trvl_flights(
                 "stdout_json_count": len(_candidate_items(bw_raw, ("flights", "offers", "results", "itineraries"))) if isinstance(bw_raw, dict) else 0,
             }
 
+            # Always capture command diagnostics for every executed one-way command
+            broad_command_results.append({
+                "label": stype,
+                "command": cmd_result.args,
+                "exit_code": cmd_result.returncode,
+                "elapsed_seconds": round(getattr(cmd_result, "elapsed_seconds", 0), 3),
+                "stdout_json_success": bw_meta["stdout_json_success"],
+                "stdout_json_count": bw_meta["stdout_json_count"],
+                "stderr_preview": _bounded_string(cmd_result.stderr, 500),
+            })
+
             if broad_include_one_way_fallbacks or (stype == "outbound_one_way" and len(normalized.get("offers", [])) == 0):
                 bw_normalized = normalize_broad_alternatives(
                     bw_raw,
@@ -1102,22 +1114,28 @@ def search_trvl_flights(
             broad_alternatives.append(risky_alt)
             broad_skipped_reasons.extend(risky_alt.get("skipped_reasons", []))
 
-        # Build broad summary
-        total_broad = sum(a["raw_count"] for a in broad_alternatives)
-        total_broad_norm = sum(a["normalized_count"] for a in broad_alternatives)
+        # Build broad summary (always present when broad discovery is enabled and has_return)
+        total_broad = sum(a["raw_count"] for a in broad_alternatives) if broad_alternatives else 0
+        total_broad_norm = sum(a["normalized_count"] for a in broad_alternatives) if broad_alternatives else 0
         broad_summary = {
             "enabled": True,
             "one_way_searches_run": len(one_way_results),
             "total_raw_alternatives": total_broad,
             "total_normalized_alternatives": total_broad_norm,
-            "search_types": [a["search_type"] for a in broad_alternatives],
+            "search_types": [a["search_type"] for a in broad_alternatives] if broad_alternatives else [],
         }
 
     # Merge broad data into normalized result diagnostics
-    if broad_alternatives:
-        normalized["broad_alternatives"] = broad_alternatives[:broad_max_alternatives]
+    if broad_discovery_enabled and has_return:
+        # Always include broad_summary when broad discovery is enabled with return date
         normalized["broad_summary"] = broad_summary
-        normalized["broad_skipped_reasons"] = broad_skipped_reasons
+        if broad_alternatives:
+            normalized["broad_alternatives"] = broad_alternatives[:broad_max_alternatives]
+        if broad_skipped_reasons:
+            normalized["broad_skipped_reasons"] = broad_skipped_reasons
+        # Always include command diagnostics when broad discovery is enabled
+        if broad_command_results:
+            normalized["command_results"] = broad_command_results[:10]
 
     return {"status": "completed", "normalized_result": normalized, "raw_result": rt_raw_summary, "error_message": None}
 
