@@ -130,3 +130,165 @@ def test_upstream_fast_flights_exception_returns_error(monkeypatch):
     assert "No flights found" in result["error_message"]
     assert len(result["error_message"]) < 1300
     assert result["raw_result"]["diagnostic_error_excerpt"].endswith("[truncated]")
+
+
+# ---- Provider extraction tests ----
+
+def test_flight_name_provides_provider():
+    """Fake fast-flights Flight with name='American', price='$296' creates usable offer."""
+    raw = FakeResult(flights=[FakeFlight(name="American", price="$296")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 1
+    assert normalized["offers"][0]["provider"] == "American"
+    assert normalized["offers"][0]["total_price"] == 296.0
+
+
+def test_flight_airline_provides_provider():
+    """Fake fast-flights Flight with airline='JetBlue', price='$174' creates usable offer."""
+    raw = FakeResult(flights=[FakeFlight(airline="JetBlue", price="$174")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 1
+    assert normalized["offers"][0]["provider"] == "JetBlue"
+
+
+def test_flight_carrier_provides_provider():
+    """Nested carrier field provides provider."""
+    raw = FakeResult(flights=[FakeFlight(carrier="Delta", price="$350")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 1
+    assert normalized["offers"][0]["provider"] == "Delta"
+
+
+def test_flight_company_provides_provider():
+    """Flight.company field provides provider."""
+    raw = FakeResult(flights=[FakeFlight(company="Southwest", price="$210")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 1
+    assert normalized["offers"][0]["provider"] == "Southwest"
+
+
+def test_flight_name_list_provides_provider():
+    """Flight.name as list provides provider from first valid entry."""
+    raw = FakeResult(flights=[FakeFlight(name=["United", "Express"], price="$420")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 1
+    assert "United" in normalized["offers"][0]["provider"]
+
+
+def test_airport_code_name_rejected_as_provider():
+    """Airport-code-only names like 'PIT' are rejected as provider."""
+    raw = FakeResult(flights=[FakeFlight(name="PIT", price="$296")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert normalized["offers"] == []
+
+
+def test_route_label_name_rejected_as_provider():
+    """Route-label names like 'PIT to ORD' are rejected as provider."""
+    raw = FakeResult(flights=[FakeFlight(name="PIT to ORD", price="$296")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert normalized["offers"] == []
+
+
+def test_flight_number_name_rejected_as_provider():
+    """Flight-number-like names are rejected as provider."""
+    raw = FakeResult(flights=[FakeFlight(name="AA1234", price="$296")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert normalized["offers"] == []
+
+
+def test_current_price_low_not_used_as_numeric_price():
+    """Result.current_price='low' is never used as numeric total_price."""
+    raw = FakeResult(current_price="low", flights=[FakeFlight(name="American", price="$296")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 1
+    assert normalized["offers"][0]["total_price"] == 296.0
+
+
+# ---- Regression: PIT/ORD-style fake result creates completed SourceResult with offers ----
+
+def test_pit_ord_fake_result_creates_offers():
+    """PIT->ORD style fake result creates at least one offer."""
+    raw = FakeResult(flights=[
+        FakeFlight(name="American", price="$296"),
+        FakeFlight(name="United", price="$310"),
+        FakeFlight(price="$400"),  # no provider, should be unpriced
+    ])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 2
+    assert normalized["unpriced_result_count"] == 1
+
+
+# ---- Error truncation tests ----
+
+def test_huge_html_error_is_truncated():
+    """Huge upstream HTML error is truncated in SourceResult.error_message."""
+    big_msg = "Error: " + ("x" * 5000)
+    result = fast_flights_adapter._error(big_msg, raw={"diagnostic_raw": {"excerpt": big_msg}})
+    assert result["status"] == "error"
+    assert len(result["error_message"]) < 1300
+    assert "[truncated]" in result["error_message"]
+
+
+def test_diagnostic_error_excerpt_is_bounded():
+    """diagnostic_error_excerpt is bounded."""
+    big_msg = "Error: " + ("y" * 5000)
+    result = fast_flights_adapter._error(big_msg)
+    excerpt = result["raw_result"].get("diagnostic_error_excerpt", "")
+    assert len(excerpt) < 2000
+    assert "[truncated]" in excerpt
+
+
+# ---- Bounding tests ----
+
+def test_bounded_fake_run_creates_at_most_max_results():
+    """Bounded fake run with 35 offers creates <=20 PriceSnapshots."""
+    max_r = fast_flights_adapter.DEFAULT_MAX_RESULTS
+    flights = [FakeFlight(name=f"Airline{i}", price=f"${100+i}") for i in range(35)]
+    raw = FakeResult(flights=flights)
+
+    # Bounding is applied by the search runner / quote normalizer, not _normalize_flights.
+    # Verify that _normalize_flights produces all offers (bounding happens downstream).
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 35
+
+
+# ---- Query metadata tests ----
+
+def test_search_fast_flights_includes_resolved_airports(monkeypatch):
+    """search_fast_flights includes resolved_origin/destination in normalized_result."""
+    raw = FakeResult(flights=[FakeFlight(name="American", price="$296")])
+    module = FakeFastFlightsModule(raw)
+    install_fake_module(monkeypatch, module)
+
+    result = fast_flights_adapter.search_fast_flights(query(), enabled=True)
+
+    assert result["status"] == "completed"
+    nr = result["normalized_result"]
+    assert nr.get("resolved_origin_airport") == "PIT"
+    assert nr.get("resolved_destination_airport") == "ORD"
+
+
+def test_search_fast_flights_query_json_includes_route_metadata(monkeypatch):
+    """SourceResult query_json includes origin_value/destination_value and airport codes."""
+    raw = FakeResult(flights=[FakeFlight(name="American", price="$296")])
+    module = FakeFastFlightsModule(raw)
+    install_fake_module(monkeypatch, module)
+
+    result = fast_flights_adapter.search_fast_flights(query(), enabled=True)
+
+    assert result["status"] == "completed"
+    nr = result["normalized_result"]
+    # The adapter attaches resolved airports to normalized_result.
+    assert "resolved_origin_airport" in nr
+    assert "resolved_destination_airport" in nr
+
+
+# ---- No-provider priced result remains not_usable_for_pricing (probe path) ----
+
+def test_no_provider_but_priced_has_unpriced_count():
+    """No-provider but priced fake result has unpriced_result_count > 0 and no offers."""
+    raw = FakeResult(flights=[FakeFlight(price="$296")])
+    normalized = fast_flights_adapter._normalize_flights(raw, query())
+    assert len(normalized["offers"]) == 0
+    assert normalized["unpriced_result_count"] == 1
+

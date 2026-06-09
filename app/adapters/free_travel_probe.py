@@ -325,6 +325,15 @@ def _provider_value(payload: dict[str, Any]) -> str | None:
         "name",
         "hotel_name",
         "title",
+        # camelCase/PascalCase variants that real fast-flights may use.
+        "Provider",
+        "Airline",
+        "AirlineName",
+        "Airlines",
+        "Carrier",
+        "FlightName",
+        "Title",
+        "CompanyName",
     ):
         value = payload.get(key)
         if value in (None, ""):
@@ -603,6 +612,13 @@ def _object_to_data(value: Any) -> Any:
         data = {key: _object_to_data(item) for key, item in vars(value).items() if not key.startswith("_")}
         data.setdefault("raw_repr", repr(value))
         return data
+    # Fallback for __slots__ objects (e.g. fast-flights Flight classes):
+    try:
+        slot_attrs = {attr for attr in dir(value) if not attr.startswith("_") and not callable(getattr(value, attr))}
+        if slot_attrs:
+            return {key: _object_to_data(getattr(value, key)) for key in sorted(slot_attrs)}
+    except Exception:
+        pass
     return str(value)
 
 

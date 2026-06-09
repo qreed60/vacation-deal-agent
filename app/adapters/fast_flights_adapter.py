@@ -104,6 +104,14 @@ def _object_to_data(value: Any) -> Any:
             return _object_to_data(value.dict())
     if hasattr(value, "__dict__"):
         return {key: _object_to_data(item) for key, item in vars(value).items() if not key.startswith("_")}
+    # Fallback for __slots__ objects (e.g. fast-flights Flight classes):
+    # read all public attributes via dir(), skipping callables and dunder names.
+    try:
+        slot_attrs = {attr for attr in dir(value) if not attr.startswith("_") and not callable(getattr(value, attr))}
+        if slot_attrs:
+            return {key: _object_to_data(getattr(value, key)) for key in sorted(slot_attrs)}
+    except Exception:
+        pass
     return _truncate_string(repr(value))
 
 
@@ -213,6 +221,7 @@ def _iter_dicts(raw: Any) -> list[dict[str, Any]]:
 
 
 def _provider_value(payload: dict[str, Any]) -> str | None:
+    # Check snake_case keys first (most common), then camelCase/PascalCase variants.
     for key in ("provider", "airline", "airline_name", "airlines", "carrier", "carriers", "name", "company", "flight_name", "title"):
         value = payload.get(key)
         if value in (None, ""):
@@ -226,6 +235,13 @@ def _provider_value(payload: dict[str, Any]) -> str | None:
         provider = _valid_provider(str(value))
         if provider:
             return provider
+    # Fallback: camelCase/PascalCase variants that real fast-flights may use.
+    for key in ("Provider", "Airline", "AirlineName", "Airlines", "Carrier", "Carriers", "FlightName", "Title", "CompanyName"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            provider = _valid_provider(str(value))
+            if provider:
+                return provider
     nested_providers: list[str] = []
     for key in ("segments", "legs", "flights", "details", "itinerary", "flight_details"):
         for nested in _iter_dicts(payload.get(key)):
