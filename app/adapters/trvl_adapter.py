@@ -462,6 +462,139 @@ def _is_risky_offer(flight: dict[str, Any], stderr_warnings: list[str]) -> bool:
     return False
 
 
+def _classify_risk(flight: dict[str, Any], stderr_warnings: list[str]) -> str:
+    """Classify the specific risk type of a flight offer."""
+    # Check stderr warnings first for specificity
+    risky_terms = {
+        "hidden_city": "hidden_city",
+        "throwaway": "throwaway",
+        "skiplagged_hack": "provider_skiplagged",
+        "nested": "nested",
+        "self_connect": "self_connect",
+        "separate_tickets": "separate_tickets",
+    }
+    for warning in stderr_warnings:
+        lower_warning = warning.lower()
+        for term, label in risky_terms.items():
+            if term in lower_warning:
+                return label
+
+    # Check flight fields
+    if flight.get("self_connect") is True:
+        return "self_connect"
+
+    trvl_provider = _first_string(flight, ("provider", "source_provider", "source")) or ""
+    cheapest_source = _first_string(flight, ("cheapest_source", "cheapestSource")) or ""
+    combined = (trvl_provider + " " + cheapest_source).lower()
+
+    if any(ind in combined for ind in ("hidden_city", "hidden city", "hiddencity")):
+        return "hidden_city"
+    if any(ind in combined for ind in ("throwaway",)):
+        return "throwaway"
+    if any(ind in combined for ind in ("skiplagged_hack", "skiplagged hack", "skiplaggedhack", "skiplagged")):
+        return "provider_skiplagged"
+
+    # Check warnings on flight object
+    warnings = flight.get("warnings") or flight.get("warning")
+    if isinstance(warnings, str):
+        warnings_list = [w.strip() for w in warnings.split(",") if w.strip()]
+    elif isinstance(warnings, list):
+        warnings_list = [str(w).strip() for w in warnings if w]
+    else:
+        warnings_list = []
+
+    for warning in warnings_list:
+        lower_warning = warning.lower()
+        if "hidden_city" in lower_warning or "throwaway" in lower_warning:
+            return "hidden_city"
+        if "skiplagged_hack" in lower_warning:
+            return "provider_skiplagged"
+
+    return "risky_offer"
+
+
+def _build_risky_round_trip_alternatives(
+    risky_offers: list[dict[str, Any]],
+    query_json: dict[str, Any],
+    *,
+    stderr: str = "",
+    command_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a broad_alternatives entry from captured risky round-trip offers."""
+    alternatives: list[dict[str, Any]] = []
+    skipped_reasons: list[dict[str, str]] = []
+
+    for ro in risky_offers:
+        risk_type = ro.get("risk_type", "risky_offer")
+        # Determine offer_category based on risk type
+        if risk_type == "self_connect":
+            offer_category = "risky_round_trip"
+        elif risk_type in ("hidden_city", "throwaway"):
+            offer_category = "risky_round_trip"
+        else:
+            offer_category = "risky_round_trip"
+
+        # Determine broad_reason from risk type
+        broad_reason_map = {
+            "self_connect": "self_connect",
+            "hidden_city": "hidden_city",
+            "throwaway": "throwaway",
+            "provider_skiplagged": "provider_skiplagged",
+            "nested": "nested",
+            "separate_tickets": "separate_tickets",
+        }
+        broad_reason = broad_reason_map.get(risk_type, "risky_offer")
+
+        offer = {
+            "component_type": "flight",
+            "component_type_label": "Airfare (Broad Alternative)",
+            "source_name": SOURCE_NAME,
+            "result_type": "flight",
+            "provider": ro["provider"],
+            "airline_name": ro["provider"],
+            "label": ro.get("label", ""),
+            "total_price": ro["price"],
+            "currency": ro["currency"],
+            "origin": ro.get("origin") or "",
+            "destination": ro.get("destination") or "",
+            "departure": ro.get("departure"),
+            "arrival": ro.get("arrival"),
+            "departure_date": ro.get("departure_date"),
+            "return_date": ro.get("return_date"),
+            "duration": ro.get("duration"),
+            "stops": ro.get("stops"),
+            "flight_numbers": [ro["flight_signature"]] if ro.get("flight_signature") else None,
+            "flight_signature": ro.get("flight_signature"),
+            "trvl_provider": ro.get("trvl_provider"),
+            "cheapest_source": ro.get("cheapest_source"),
+            "source_url": ro.get("source_url"),
+            "link_type": "exact_source" if ro.get("source_url") else "none",
+            "link_label": "View source price" if ro.get("source_url") else None,
+            "mock": False,
+            "search_type": "round_trip",
+            "offer_category": offer_category,
+            "broad_reason": broad_reason,
+            "eligibility_for_best_deal": False,
+            "is_risky": True,
+            "raw_offer_reference": ro.get("raw_offer_reference"),
+        }
+        alternatives.append(offer)
+
+    return {
+        "source_name": SOURCE_NAME,
+        "result_type": "flight",
+        "search_type": "round_trip",
+        "alternatives": alternatives,
+        "raw_count": len(risky_offers),
+        "normalized_count": len(alternatives),
+        "skipped_count": 0,
+        "skipped_reasons": skipped_reasons,
+        "stderr_warnings": _stderr_warnings(stderr),
+        "command": _bounded_public_data(command_metadata or {}, max_depth=3, max_items=20),
+        "query": query_json,
+    }
+
+
 def _clean_airport_code(value: str | None) -> str | None:
     """Clean airport code strings by removing embedded quotes.
 
@@ -476,7 +609,7 @@ def _clean_airport_code(value: str | None) -> str | None:
     return cleaned if cleaned else None
 
 
-def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int, stderr: str = "", command_metadata: dict[str, Any] | None = None, traveler_pricing_note: str | None = None) -> dict[str, Any]:
+def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int, stderr: str = "", command_metadata: dict[str, Any] | None = None, traveler_pricing_note: str | None = None, captured_risky_offers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     flights = _candidate_items(raw, ("flights", "offers", "results", "itineraries"))
     offers: list[dict[str, Any]] = []
     skipped_count = 0
@@ -518,9 +651,45 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
                     if any(t in w.lower() for t in ("hidden_city", "throwaway", "skiplagged_hack")):
                         reason_parts.append(w)
             cheapest = cheapest_source or trvl_provider or provider
+            risk_reason = "; ".join(reason_parts) or "risky_pattern"
             if any(ind in cheapest.lower() for ind in ("hidden_city", "throwaway", "skiplagged", "hack")):
                 reason_parts.append(f"provider={cheapest}")
-            skipped_reasons.append({"reason": "risky_offer", "details": "; ".join(reason_parts) or "risky_pattern"})
+                risk_reason = "; ".join(reason_parts)
+            skipped_reasons.append({"reason": "risky_offer", "details": risk_reason})
+
+            # Capture risky offer for broad_alternatives when requested
+            if captured_risky_offers is not None:
+                departure, arrival = _flight_times(flight)
+                source_url = _source_url(flight)
+                flight_signature = _flight_number_signature(flight)
+                origin = query_json.get("origin_airport") or query_json.get("origin_value", "")
+                destination = query_json.get("destination_airport") or query_json.get("destination_value", "")
+                label_parts = [str(provider), str(origin), "to", str(destination)]
+                label = " ".join(part for part in label_parts if part)
+
+                # Determine specific risk type for broad_reason
+                risk_type = _classify_risk(flight, stderr_warnings)
+
+                captured_risky_offers.append({
+                    "price": price,
+                    "currency": currency,
+                    "provider": provider,
+                    "trvl_provider": trvl_provider,
+                    "cheapest_source": cheapest_source,
+                    "departure": departure,
+                    "arrival": arrival,
+                    "source_url": source_url,
+                    "flight_signature": flight_signature,
+                    "label": label,
+                    "origin": origin,
+                    "destination": destination,
+                    "duration": flight.get("duration"),
+                    "stops": flight.get("stops"),
+                    "departure_date": query_json.get("departure_date"),
+                    "return_date": query_json.get("return_date"),
+                    "risk_type": risk_type,
+                    "raw_offer_reference": _clean_raw_airport_codes(_bounded_public_data(flight, max_depth=3, max_items=12)),
+                })
             continue
 
         # Currency filtering
@@ -759,9 +928,85 @@ def search_trvl_flights(
     )
 
     if rt_result.returncode != 0 and not _success(rt_raw):
-        return _error(f"trvl flights exited with code {rt_result.returncode}", "flight", rt_raw_summary)
+        # RT command failed with no usable JSON. Still run one-way commands for diagnostics,
+        # then return error status with bounded command_results explaining each failure.
+        broad_alternatives: list[dict[str, Any]] = []
+        broad_skipped_reasons: list[dict[str, str]] = []
+        command_results: list[dict[str, Any]] = [
+            {
+                "command_label": "round_trip",
+                "exit_code": rt_result.returncode,
+                "elapsed_seconds": round(getattr(rt_result, "elapsed_seconds", 0), 3),
+                "stdout_json_success": _success(rt_raw),
+                "stdout_json_count": len(_candidate_items(rt_raw, ("flights", "offers", "results", "itineraries"))) if isinstance(rt_raw, dict) else 0,
+                "stderr_preview": _bounded_string(rt_result.stderr, 500),
+            }
+        ]
 
-    # Normalize round-trip results as safe offers (existing behavior)
+        # Run one-way commands to collect diagnostics even when RT failed
+        if broad_discovery_enabled and has_return:
+            outbound_command = [
+                binary, "flights",
+                str(query_json["origin_airport"]),
+                str(query_json["destination_airport"]),
+                str(query_json["departure_date"]),
+                "--adults", str(query_json["adults_arg"]),
+                "--currency", currency, "--format", "json",
+            ]
+            outbound_result = _run_trvl(outbound_command, timeout_seconds)
+            bw_raw_out = _load_json_text(outbound_result.stdout)
+            command_results.append({
+                "command_label": "outbound_one_way",
+                "exit_code": outbound_result.returncode,
+                "elapsed_seconds": round(getattr(outbound_result, "elapsed_seconds", 0), 3),
+                "stdout_json_success": _success(bw_raw_out),
+                "stdout_json_count": len(_candidate_items(bw_raw_out, ("flights", "offers", "results", "itineraries"))) if isinstance(bw_raw_out, dict) else 0,
+                "stderr_preview": _bounded_string(outbound_result.stderr, 500),
+            })
+
+            return_query_json = dict(query_json)
+            return_query_json["origin_airport"] = query_json["destination_airport"]
+            return_query_json["destination_airport"] = query_json["origin_airport"]
+            return_query_json["departure_date"] = query_json["return_date"]
+            return_query_json.pop("return_date", None)
+
+            return_command = [
+                binary, "flights",
+                str(return_query_json["origin_airport"]),
+                str(return_query_json["destination_airport"]),
+                str(return_query_json["departure_date"]),
+                "--adults", str(query_json["adults_arg"]),
+                "--currency", currency, "--format", "json",
+            ]
+            return_result = _run_trvl(return_command, timeout_seconds)
+            bw_raw_ret = _load_json_text(return_result.stdout)
+            command_results.append({
+                "command_label": "return_one_way",
+                "exit_code": return_result.returncode,
+                "elapsed_seconds": round(getattr(return_result, "elapsed_seconds", 0), 3),
+                "stdout_json_success": _success(bw_raw_ret),
+                "stdout_json_count": len(_candidate_items(bw_raw_ret, ("flights", "offers", "results", "itineraries"))) if isinstance(bw_raw_ret, dict) else 0,
+                "stderr_preview": _bounded_string(return_result.stderr, 500),
+            })
+
+        # Build error result with bounded diagnostics for all commands
+        concise = f"trvl flights exited with code {rt_result.returncode}"
+        return {
+            "status": "error",
+            "normalized_result": {
+                "source_name": SOURCE_NAME,
+                "result_type": "flight",
+                "offers": [],
+                "reason": concise,
+                "command_results": command_results[:10],  # bounded to last 10 failures
+            },
+            "raw_result": rt_raw_summary,
+            "error_message": concise,
+        }
+
+    # Normalize round-trip results as safe offers (existing behavior).
+    # When broad_discovery_enabled, also capture risky offers for broad_alternatives.
+    captured_risky_offers: list[dict[str, Any]] = []
     normalized = normalize_flights(
         rt_raw,
         query_json,
@@ -771,8 +1016,11 @@ def search_trvl_flights(
             "argv": rt_command,
             "exit_code": rt_result.returncode,
             "elapsed_seconds": round(getattr(rt_result, "elapsed_seconds", 0), 3),
+            "stdout_json_success": _success(rt_raw),
+            "stdout_json_count": len(_candidate_items(rt_raw, ("flights", "offers", "results", "itineraries"))) if isinstance(rt_raw, dict) else 0,
         },
         traveler_pricing_note=traveler_pricing_note,
+        captured_risky_offers=captured_risky_offers,
     )
 
     # ── Broad discovery (optional fallback) ────────────────────────────────
@@ -821,6 +1069,8 @@ def search_trvl_flights(
                 "argv": cmd_result.args,
                 "exit_code": cmd_result.returncode,
                 "elapsed_seconds": round(getattr(cmd_result, "elapsed_seconds", 0), 3),
+                "stdout_json_success": _success(bw_raw),
+                "stdout_json_count": len(_candidate_items(bw_raw, ("flights", "offers", "results", "itineraries"))) if isinstance(bw_raw, dict) else 0,
             }
 
             if broad_include_one_way_fallbacks or (stype == "outbound_one_way" and len(normalized.get("offers", [])) == 0):
@@ -834,6 +1084,23 @@ def search_trvl_flights(
                 )
                 broad_alternatives.append(bw_normalized)
                 broad_skipped_reasons.extend(bw_normalized.get("skipped_reasons", []))
+
+        # Include captured risky offers from primary round-trip as broad alternatives
+        if broad_allow_risky_alternatives and captured_risky_offers:
+            risky_alt = _build_risky_round_trip_alternatives(
+                captured_risky_offers,
+                query_json,
+                stderr=rt_result.stderr,
+                command_metadata={
+                    "argv": rt_command,
+                    "exit_code": rt_result.returncode,
+                    "elapsed_seconds": round(getattr(rt_result, "elapsed_seconds", 0), 3),
+                    "stdout_json_success": _success(rt_raw),
+                    "stdout_json_count": len(_candidate_items(rt_raw, ("flights", "offers", "results", "itineraries"))) if isinstance(rt_raw, dict) else 0,
+                },
+            )
+            broad_alternatives.append(risky_alt)
+            broad_skipped_reasons.extend(risky_alt.get("skipped_reasons", []))
 
         # Build broad summary
         total_broad = sum(a["raw_count"] for a in broad_alternatives)
@@ -975,6 +1242,31 @@ def normalize_broad_alternatives(
         is_one_way = search_type == "one_way"
         is_risky = _is_risky_offer(flight, stderr_warnings)
 
+        # Determine offer_category and broad_reason with more specificity
+        if is_risky:
+            risk_type = _classify_risk(flight, stderr_warnings)
+            if search_type in ("outbound_one_way", "return_one_way"):
+                offer_category = "risky_one_way"
+            else:
+                offer_category = "risky_round_trip"
+            broad_reason_map = {
+                "self_connect": "self_connect",
+                "hidden_city": "hidden_city",
+                "throwaway": "throwaway",
+                "provider_skiplagged": "provider_skiplagged",
+                "nested": "nested",
+                "separate_tickets": "separate_tickets",
+            }
+            broad_reason = broad_reason_map.get(risk_type, "risky_offer")
+        elif is_one_way:
+            offer_category = "one_way"
+            broad_reason = "one_way_fallback"
+        else:
+            offer_category = "safe_alternative"
+            broad_reason = "round_trip_safe"
+
+
+        # Add eligibility_for_best_deal metadata (always False for broad alternatives)
         offer = {
             "component_type": "flight",
             "component_type_label": "Airfare (Broad Alternative)",
@@ -1002,16 +1294,12 @@ def normalize_broad_alternatives(
             "link_label": "View source price" if source_url else None,
             "mock": False,
             "search_type": search_type,
+            "offer_category": offer_category,
+            "broad_reason": broad_reason,
+            "eligibility_for_best_deal": False,
             "is_risky": is_risky,
             "raw_offer_reference": _clean_raw_airport_codes(_bounded_public_data(flight, max_depth=3, max_items=12)),
         }
-
-        if is_one_way:
-            offer["offer_category"] = "one_way"
-        elif is_risky:
-            offer["offer_category"] = "risky_alternative"
-        else:
-            offer["offer_category"] = "safe_alternative"
 
         alternatives.append(offer)
 
