@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Generator
+from typing import Generator, List, Tuple
 
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, text
 
 
 DEFAULT_DB_PATH = Path("data/vacation_deals.sqlite3")
@@ -34,6 +34,47 @@ def get_engine():
 
 def init_db() -> None:
     SQLModel.metadata.create_all(get_engine())
+    _ensure_vacation_columns()
+
+
+def _get_table_columns(table_name: str) -> List[str]:
+    """Return a list of column names for the given SQLite table."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+        rows: List[Tuple] = result.fetchall()
+        return [row[1] for row in rows]
+
+
+def _ensure_vacation_columns() -> None:
+    """Add missing vacation columns to existing SQLite databases.
+
+    This is an additive, idempotent migration that only applies to SQLite.
+    It does not drop tables, delete data, or rewrite existing rows.
+    Safe to call when the vacation table does not exist yet.
+    """
+    engine = get_engine()
+    url = database_url()
+    if not url.startswith("sqlite"):
+        return
+
+    with engine.connect() as conn:
+        try:
+            columns = _get_table_columns("vacation")
+        except Exception:
+            # Table doesn't exist yet; SQLModel.create_all will create it.
+            return
+
+        if "preferred_airports_json" not in columns:
+            conn.execute(
+                text("ALTER TABLE vacation ADD COLUMN preferred_airports_json VARCHAR NOT NULL DEFAULT '[]'")
+            )
+            conn.commit()
+        if "alternate_airports_json" not in columns:
+            conn.execute(
+                text("ALTER TABLE vacation ADD COLUMN alternate_airports_json VARCHAR NOT NULL DEFAULT '[]'")
+            )
+            conn.commit()
 
 
 def get_session() -> Generator[Session, None, None]:

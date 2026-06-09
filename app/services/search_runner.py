@@ -107,6 +107,11 @@ def _run_real_sources(
             alternate_airports=alternate,
             max_results=config.fast_flights_max_results,
         )
+        # Attach resolved airport metadata to query_entry for SourceResult.query_json.
+        nr = fast_flights_result.get("normalized_result") or {}
+        if isinstance(nr, dict):
+            fast_flights_query["resolved_origin_airport"] = nr.get("resolved_origin_airport")
+            fast_flights_query["resolved_destination_airport"] = nr.get("resolved_destination_airport")
         statuses.append(_persist_adapter_result(session, search_run_id, "fast_flights", "flight", fast_flights_query, fast_flights_result))
 
         flight_query = {"source_name": "amadeus", "result_type": "flight", "query": query}
