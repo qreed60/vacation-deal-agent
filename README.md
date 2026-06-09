@@ -88,8 +88,48 @@ by git and should not be committed.
 - `FAST_FLIGHTS_FETCH_MODE` defaults to `common`; unsafe fallback/browser modes are forced back to `common`
 - `FAST_FLIGHTS_SEAT` defaults to `economy`
 - `FAST_FLIGHTS_MAX_STOPS` optional integer
+- `TRVL_ENABLED` optional free/no-key structured flight and hotel source, default `false`
+- `TRVL_BINARY_PATH` defaults to `.tools/trvl/trvl`; if missing, the runner also checks `.tools/trvl/trvl` and then `trvl` on `PATH`
+- `TRVL_TIMEOUT_SECONDS` defaults to `120`
+- `TRVL_MAX_FLIGHT_RESULTS` defaults to `20`
+- `TRVL_MAX_HOTEL_RESULTS` defaults to `20`
+- `TRVL_CURRENCY` defaults to `USD`
 - `FREE_TRAVEL_PROBE_FLIGHTS_SKILL_COMMAND` optional local JSON command for the isolated free-source probe
 - `FREE_TRAVEL_PROBE_TRAVEL_HACKING_TOOLKIT_COMMAND` optional local JSON command for the isolated free-source probe
+
+## Optional trvl Source
+
+`trvl` can be enabled as the preferred free/no-key structured source for
+flights and hotels:
+
+```bash
+TRVL_ENABLED=true FAST_FLIGHTS_ENABLED=false python scripts/run_search_once.py --vacation-id 1 --use-real-sources
+```
+
+The source is disabled by default. The runner resolves the binary in this order:
+`TRVL_BINARY_PATH`, `.tools/trvl/trvl`, then `trvl` on `PATH`. If
+`TRVL_ENABLED=true` but no binary is found, the search run records a skipped
+SourceResult with a clear missing-dependency error and continues safely.
+
+trvl may write partial provider warnings to stderr while still returning usable
+JSON on stdout. When stdout contains `success=true`, those stderr lines are
+stored as bounded warnings and do not fail the source result.
+
+Flight searches use resolved IATA origin/destination fields and only create
+price snapshots from rows with numeric price, currency, and source identity
+from airline, provider, or cheapest source fields. trvl flight passenger
+pricing uses the CLI's `--adults` argument for the total traveler count; when
+children are present, the normalized metadata notes that all travelers were
+priced as adults because the CLI does not expose child passenger pricing.
+
+Hotel searches treat trvl hotel price as nightly, matching the CLI's per-night
+hotel price flags. Normalized hotel offers preserve `nightly_price`, `nights`,
+`total_price`, and `price_basis=nightly`. Hotel snapshots are created only from
+rows with a hotel name, numeric price, and currency.
+
+trvl prices are source-grounded but still need user verification before booking.
+The app does not perform booking, payment, reservation, or browser-scraping
+actions.
 
 ## Optional fast-flights Source
 
@@ -142,7 +182,7 @@ Candidates:
 
 - `fast-flights`
 - `fli`
-- `trvl`
+- `trvl` (uses the same local binary detection as the optional production source)
 - `flights-skill`
 - `travel-hacking-toolkit`
 
@@ -162,6 +202,12 @@ Run a hotel-oriented `trvl` probe:
 
 ```bash
 python scripts/probe_free_travel_sources.py --candidate trvl --destination "Minot, ND" --check-in 2026-09-18 --check-out 2026-09-21 --adults 2 --children 3
+```
+
+Run a flight-oriented `trvl` probe:
+
+```bash
+python scripts/probe_free_travel_sources.py --candidate trvl --origin PIT --destination MOT --depart 2026-09-18 --return 2026-09-21 --adults 2 --children 3
 ```
 
 Run every known candidate:

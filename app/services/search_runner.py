@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from app.adapters import amadeus, fast_flights_adapter, google_places, mock_travel, searxng, serpapi_travel
+from app.adapters import amadeus, fast_flights_adapter, google_places, mock_travel, searxng, serpapi_travel, trvl_adapter
 from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
 from app.db.session import get_engine
 from app.services.manifest_io import manifest_for_vacation
@@ -97,6 +97,24 @@ def _run_real_sources(
         manifest_data = manifest or {}
         preferred = manifest_data.get("preferred_airports") or []
         alternate = manifest_data.get("alternate_airports") or []
+        trvl_query = trvl_adapter.build_flight_query(
+            query,
+            currency=config.trvl_currency,
+            preferred_airports=preferred,
+            alternate_airports=alternate,
+        )
+        trvl_flight_result = trvl_adapter.search_trvl_flights(
+            query,
+            enabled=config.trvl_enabled,
+            binary_path=config.trvl_binary_path,
+            timeout_seconds=config.trvl_timeout_seconds,
+            max_results=config.trvl_max_flight_results,
+            currency=config.trvl_currency,
+            preferred_airports=preferred,
+            alternate_airports=alternate,
+        )
+        statuses.append(_persist_adapter_result(session, search_run_id, "trvl", "flight", trvl_query, trvl_flight_result))
+
         fast_flights_result = fast_flights_adapter.search_fast_flights(
             query,
             enabled=config.fast_flights_enabled,
@@ -129,6 +147,17 @@ def _run_real_sources(
         statuses.append(
             _persist_adapter_result(session, search_run_id, "serpapi_google_hotels", "hotel", serpapi_query, serpapi_result)
         )
+
+        trvl_query = trvl_adapter.build_hotel_query(query, currency=config.trvl_currency)
+        trvl_hotel_result = trvl_adapter.search_trvl_hotels(
+            query,
+            enabled=config.trvl_enabled,
+            binary_path=config.trvl_binary_path,
+            timeout_seconds=config.trvl_timeout_seconds,
+            max_results=config.trvl_max_hotel_results,
+            currency=config.trvl_currency,
+        )
+        statuses.append(_persist_adapter_result(session, search_run_id, "trvl", "hotel", trvl_query, trvl_hotel_result))
 
         hotel_query = {"source_name": "amadeus", "result_type": "hotel", "query": {**query, "operation": "hotel_list"}}
         hotel_result = amadeus_client.hotel_list_search(query)

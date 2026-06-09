@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.adapters import trvl_adapter
+
 
 CANDIDATES = (
     "fast-flights",
@@ -659,26 +661,24 @@ def probe_fli(request: ProbeRequest) -> CandidateProbeResult:
 
 
 def probe_trvl(request: ProbeRequest) -> list[CandidateProbeResult]:
-    command = shutil.which("trvl")
+    command = trvl_adapter.resolve_trvl_binary(os.environ.get("TRVL_BINARY_PATH"))
     if not command:
-        return [missing_dependency("trvl", "flight", "Install a local trvl command before probing.")]
-    try:
-        result = _run_command([command, "--help"], timeout_seconds=10)
-    except Exception as exc:
-        return [_failed("trvl", "flight", exc)]
-    help_text = f"{result.stdout}\n{result.stderr}".lower()
-    if "api key" in help_text or "token" in help_text:
-        return [_unsupported("trvl", "flight", "unsupported_for_free_source_goal", "trvl help output appears to require an API key.", result.stdout, result.stderr)]
-    if "playwright" in help_text or "selenium" in help_text or "browser" in help_text:
-        return [_unsupported("trvl", "flight", "unsupported_for_current_phase", "trvl help output appears to require browser automation.", result.stdout, result.stderr)]
-
+        component_type = "hotel" if request.check_in or request.check_out else "flight"
+        return [missing_dependency("trvl", component_type, "Install a local trvl command or set TRVL_BINARY_PATH before probing.")]
     results: list[CandidateProbeResult] = []
-    if "flight" in help_text:
+    if request.origin and request.destination and request.depart:
         results.append(_probe_trvl_mode(command, request, "flight"))
-    if "hotel" in help_text:
+    if request.destination and request.check_in and request.check_out:
         results.append(_probe_trvl_mode(command, request, "hotel"))
     if not results:
-        results.append(_unsupported("trvl", "flight", "available", "trvl CLI is installed, but local help output does not document flight or hotel JSON query modes.", result.stdout, result.stderr))
+        results.append(
+            _unsupported(
+                "trvl",
+                "flight",
+                "available",
+                "trvl CLI is installed, but the probe needs flight dates or hotel check-in/check-out inputs.",
+            )
+        )
     return results
 
 
@@ -686,41 +686,43 @@ def _probe_trvl_mode(command: str, request: ProbeRequest, component_type: str) -
     if component_type == "hotel":
         args = [
             command,
-            "hotel",
-            "search",
-            "--destination",
+            "hotels",
             request.destination or "",
-            "--check-in",
+            "--checkin",
             request.check_in or request.depart or "",
-            "--check-out",
+            "--checkout",
             request.check_out or request.return_date or "",
-            "--adults",
-            str(request.adults),
+            "--guests",
+            str(max(1, request.adults + request.children)),
             "--children",
             str(request.children),
-            "--json",
+            "--currency",
+            os.environ.get("TRVL_CURRENCY", "USD"),
+            "--format",
+            "json",
         ]
     else:
         args = [
             command,
-            "flight",
-            "search",
-            "--origin",
+            "flights",
             request.origin or "",
-            "--destination",
             request.destination or "",
-            "--depart",
             request.depart or "",
-            "--return",
-            request.return_date or "",
-            "--adults",
-            str(request.adults),
-            "--children",
-            str(request.children),
-            "--json",
         ]
+        if request.return_date:
+            args.extend(["--return", request.return_date])
+        args.extend(
+            [
+                "--adults",
+                str(max(1, request.adults + request.children)),
+                "--currency",
+                os.environ.get("TRVL_CURRENCY", "USD"),
+                "--format",
+                "json",
+            ]
+        )
     try:
-        result = _run_command([arg for arg in args if arg != ""], timeout_seconds=30)
+        result = _run_command([arg for arg in args if arg != ""], timeout_seconds=float(os.environ.get("TRVL_TIMEOUT_SECONDS", "120")))
     except Exception as exc:
         return _failed("trvl", component_type, exc)
     raw = _load_json_text(result.stdout)

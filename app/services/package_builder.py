@@ -32,6 +32,7 @@ SOURCE_NAME_LABELS = {
     "serpapi_google_flights": "SerpAPI Google Flights",
     "serpapi_google_hotels": "SerpAPI Google Hotels",
     "structured_rental_car": "Structured rental car",
+    "trvl": "trvl",
 }
 
 

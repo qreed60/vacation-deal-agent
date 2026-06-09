@@ -11,3 +11,4 @@ data/exports/*
 !.gitkeep
 .dyad/
 data/free_source_probes/*.json
+.tools/

@@ -1,4 +1,5 @@
 import json
+import stat
 import subprocess
 import sys
 
@@ -77,6 +78,13 @@ class FakeResult:
     def __init__(self, *, current_price, flights):
         self.current_price = current_price
         self.flights = flights
+
+
+def make_fake_command(tmp_path, body: str):
+    path = tmp_path / "trvl"
+    path.write_text("#!/usr/bin/env python3\n" + body)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
 
 
 def install_fake_fast_flights(monkeypatch, module):
@@ -467,6 +475,65 @@ def test_normalized_hotel_result_with_provider_price_is_usable():
     assert result.provider == "Mainstay Suites"
     assert result.total_price == 510.0
     assert result.component_type == "hotel"
+
+
+def test_probe_trvl_flight_uses_local_binary_and_returns_usable(tmp_path, monkeypatch):
+    command = make_fake_command(
+        tmp_path,
+        """
+import json, sys
+print(json.dumps({"success": True, "flights": [{"price": 296, "currency": "USD", "provider": "Delta"}]}))
+""",
+    )
+    monkeypatch.setattr(free_travel_probe.trvl_adapter, "resolve_trvl_binary", lambda configured_path=None: str(command))
+
+    results = probe_candidate(
+        ProbeRequest(candidate="trvl", origin="PIT", destination="MOT", depart="2026-09-18", return_date="2026-09-21")
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "usable"
+    assert results[0].component_type == "flight"
+    assert results[0].provider == "Delta"
+    assert results[0].total_price == 296
+
+
+def test_probe_trvl_hotel_uses_local_binary_and_returns_usable(tmp_path, monkeypatch):
+    command = make_fake_command(
+        tmp_path,
+        """
+import json, sys
+print(json.dumps({"success": True, "hotels": [{"name": "Mainstay Suites", "price": 155, "currency": "USD"}]}))
+""",
+    )
+    monkeypatch.setattr(free_travel_probe.trvl_adapter, "resolve_trvl_binary", lambda configured_path=None: str(command))
+
+    results = probe_candidate(
+        ProbeRequest(candidate="trvl", destination="Minot, ND", check_in="2026-09-18", check_out="2026-09-21")
+    )
+
+    assert len(results) == 1
+    assert results[0].status == "usable"
+    assert results[0].component_type == "hotel"
+    assert results[0].provider == "Mainstay Suites"
+    assert results[0].total_price == 155
+
+
+def test_probe_trvl_nonzero_without_json_is_failed(tmp_path, monkeypatch):
+    command = make_fake_command(
+        tmp_path,
+        """
+import sys
+print("failure", file=sys.stderr)
+sys.exit(2)
+""",
+    )
+    monkeypatch.setattr(free_travel_probe.trvl_adapter, "resolve_trvl_binary", lambda configured_path=None: str(command))
+
+    results = probe_candidate(ProbeRequest(candidate="trvl", origin="PIT", destination="MOT", depart="2026-09-18"))
+
+    assert results[0].status == "failed"
+    assert "trvl exited with code 2" in results[0].error
 
 
 def test_text_only_result_is_not_usable_for_pricing():

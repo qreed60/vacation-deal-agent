@@ -68,7 +68,7 @@ def test_real_sources_missing_config_create_skipped_rows(session):
     results = session.exec(select(SourceResult).where(SourceResult.search_run_id == search_run.id)).all()
 
     assert search_run.status == "completed"
-    assert len(results) == 9
+    assert len(results) == 11
     assert {result.status for result in results} == {"skipped"}
     assert {result.source_name for result in results} == {
         "searxng",
@@ -77,12 +77,13 @@ def test_real_sources_missing_config_create_skipped_rows(session):
         "google_places",
         "serpapi_google_flights",
         "serpapi_google_hotels",
+        "trvl",
     }
     assert all(result.error_message for result in results)
     summary = json.loads(session.get(SearchRun, search_run.id).summary_json)
     assert summary["real_sources"] is True
     assert summary["mock"] is False
-    assert summary["source_status_counts"] == {"skipped": 9}
+    assert summary["source_status_counts"] == {"skipped": 11}
 
 
 def test_phase2_mock_behavior_still_available(session):
@@ -118,7 +119,7 @@ def test_cli_real_sources_skips_without_credentials(session):
     assert result.returncode == 0, result.stderr
     assert f"vacation_id={vacation.id}" in result.stdout
     assert "status=completed" in result.stdout
-    assert "source_results=4" in result.stdout
+    assert "source_results=5" in result.stdout
 
 
 def test_fast_flights_success_creates_source_snapshot_and_deal(session, monkeypatch):

@@ -144,6 +144,12 @@ class SourceConfig:
     fast_flights_seat: str
     fast_flights_max_stops: int | None
     fast_flights_max_results: int
+    trvl_enabled: bool
+    trvl_binary_path: str
+    trvl_timeout_seconds: float
+    trvl_max_flight_results: int
+    trvl_max_hotel_results: int
+    trvl_currency: str
 
 
 def load_source_config() -> SourceConfig:
@@ -167,4 +173,10 @@ def load_source_config() -> SourceConfig:
         fast_flights_seat=env_value("FAST_FLIGHTS_SEAT", "economy").strip(),
         fast_flights_max_stops=env_int_optional("FAST_FLIGHTS_MAX_STOPS"),
         fast_flights_max_results=int(env_value("FAST_FLIGHTS_MAX_RESULTS", "20")),
+        trvl_enabled=env_bool("TRVL_ENABLED", False),
+        trvl_binary_path=env_value("TRVL_BINARY_PATH", ".tools/trvl/trvl").strip(),
+        trvl_timeout_seconds=env_float("TRVL_TIMEOUT_SECONDS", 120.0),
+        trvl_max_flight_results=int(env_value("TRVL_MAX_FLIGHT_RESULTS", "20")),
+        trvl_max_hotel_results=int(env_value("TRVL_MAX_HOTEL_RESULTS", "20")),
+        trvl_currency=env_value("TRVL_CURRENCY", "USD").strip() or "USD",
     )
