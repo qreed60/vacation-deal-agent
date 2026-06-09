@@ -618,3 +618,8 @@ def import_manifest(
             status_code=400,
         )
     return redirect(f"/vacations/{vacation.id}")
+
+
+@router.get("/health")
+def health() -> JSONResponse:
+    return JSONResponse({"status": "ok"})

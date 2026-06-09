@@ -356,3 +356,75 @@ Out of scope for Phase 4:
 - Browser scraping
 - New real source integrations beyond the existing Phase 3 adapters
 - Notifications and periodic automation until Phase 5
+
+## Deployment (Phase 4C)
+
+The app is packaged as a Docker/Compose service for local production deployment on qllm.
+
+### Quick start
+
+```bash
+# 1. Copy the example env file and adjust if needed
+cp .env.deploy.example .env.deploy
+
+# 2. Deploy
+scripts/deploy_local.sh
+```
+
+This builds the image, starts the container, and waits for the `/health` endpoint to respond.
+
+### Port mapping
+
+The app is exposed on **host port 8095** (container port 8095 -> host port 8095).
+
+### Data persistence
+
+SQLite data in `./data/` is mounted from the host into the container via a Docker volume:
+
+```
+./data:/app/data
+```
+
+The SQLite database (`vacation_deals.sqlite3`) lives on the **host** and is **not** baked into the image. Rebuilding or restarting the container preserves all data.
+
+### trvl binary
+
+If you enable `TRVL_ENABLED=true`, mount the `trvl` binary from the host:
+
+```yaml
+volumes:
+  - ./data:/app/data
+  - /path/to/trvl:/app/.tools/trvl/trvl:ro
+```
+
+Or place it at `.tools/trvl/trvl` relative to the project root and set `TRVL_BINARY_PATH=.tools/trvl/trvl` in `.env.deploy`. The runner checks `TRVL_BINARY_PATH`, then `.tools/trvl/trvl`, then `trvl` on `PATH`.
+
+### Update deployment
+
+```bash
+scripts/update_deploy.sh   # git pull + rebuild + restart
+```
+
+### Other scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/deploy_local.sh` | Build and start the app |
+| `scripts/update_deploy.sh` | Pull latest code, rebuild, restart |
+| `scripts/logs_deploy.sh [-f]` | Tail or follow container logs |
+| `scripts/stop_deploy.sh` | Stop the container (data preserved) |
+
+### Health check
+
+A `/health` endpoint is available for Docker health checks and external monitoring:
+
+```bash
+curl http://127.0.0.1:8095/health
+# -> {"status":"ok"}
+```
+
+The docker-compose.yml includes an automatic healthcheck that runs every 30 seconds.
+
+### Future: GHCR image pull
+
+To prepare for pulling images from GitHub Container Registry (GHCR) instead of building locally, add an `image:` field to the service in `docker-compose.yml` and remove the `build:` section. This is not configured by default -- local build is the current default.
