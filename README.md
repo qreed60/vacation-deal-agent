@@ -84,6 +84,69 @@ by git and should not be committed.
 - `SERPAPI_API_KEY`
 - `SERPAPI_BASE_URL`
 - `SERPAPI_TIMEOUT_SECONDS`
+- `FREE_TRAVEL_PROBE_FLIGHTS_SKILL_COMMAND` optional local JSON command for the isolated free-source probe
+- `FREE_TRAVEL_PROBE_TRAVEL_HACKING_TOOLKIT_COMMAND` optional local JSON command for the isolated free-source probe
+
+## Free-Source Probe
+
+Phase 3/4 includes an isolated investigation CLI for checking whether
+free/open-source travel-source candidates can return structured provider, price,
+currency, and link data that Phase 4 could eventually consume. These probes are
+not production search sources and are not wired into `scripts/run_search_once.py`,
+the search runner, scheduled jobs, or the UI.
+
+Candidates:
+
+- `fast-flights`
+- `fli`
+- `trvl`
+- `flights-skill`
+- `travel-hacking-toolkit`
+
+Run a single flight candidate:
+
+```bash
+python scripts/probe_free_travel_sources.py --candidate fast-flights --origin PIT --destination MOT --depart 2026-09-18 --return 2026-09-21 --adults 2 --children 3
+```
+
+Run the `fli` candidate:
+
+```bash
+python scripts/probe_free_travel_sources.py --candidate fli --origin PIT --destination MOT --depart 2026-09-18 --return 2026-09-21 --adults 2 --children 3
+```
+
+Run a hotel-oriented `trvl` probe:
+
+```bash
+python scripts/probe_free_travel_sources.py --candidate trvl --destination "Minot, ND" --check-in 2026-09-18 --check-out 2026-09-21 --adults 2 --children 3
+```
+
+Run every known candidate:
+
+```bash
+python scripts/probe_free_travel_sources.py --all --origin PIT --destination MOT --depart 2026-09-18 --return 2026-09-21 --adults 2 --children 3
+```
+
+Each run prints a readable summary and writes a JSON report under
+`data/free_source_probes/`. The probe does not install dependencies, does not
+require paid API keys, does not start persistent MCP servers, and does not use
+browser scraping or browser automation.
+
+Status meanings:
+
+- `usable`: the candidate returned structured provider and price data.
+- `missing_dependency`: a required local package, binary, or configured local command is missing.
+- `failed`: the candidate was available but the probe call failed.
+- `unsupported`: the candidate name or mode is unknown to this probe.
+- `unsupported_for_free_source_goal`: local help or behavior indicates an API key or paid service requirement.
+- `unsupported_for_current_phase`: local help or behavior indicates browser automation or another excluded mechanism.
+- `not_usable_for_pricing`: output was present but did not include a reliable structured provider and price pair.
+- `available`: the dependency exists, but no documented local JSON search path was recognized.
+
+Reverse-engineered and free travel sources may be fragile. Keep any candidate
+isolated behind adapters, preserve the no-fabricated-price rule, and do not use
+a candidate for Phase 5 automation until it is marked `usable` with structured
+provider and price data for the needed trip shape.
 
 ## Phase 1 Scope
 
