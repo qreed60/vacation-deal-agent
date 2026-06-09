@@ -112,6 +112,10 @@ def _run_real_sources(
             currency=config.trvl_currency,
             preferred_airports=preferred,
             alternate_airports=alternate,
+            broad_discovery_enabled=config.trvl_broad_discovery_enabled,
+            broad_include_one_way_fallbacks=config.trvl_broad_include_one_way_fallbacks,
+            broad_max_alternatives=config.trvl_broad_max_alternatives,
+            broad_allow_risky_alternatives=config.trvl_broad_allow_risky_alternatives,
         )
         statuses.append(_persist_adapter_result(session, search_run_id, "trvl", "flight", trvl_query, trvl_flight_result))
 

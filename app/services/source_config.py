@@ -152,6 +152,10 @@ class SourceConfig:
     trvl_currency: str
     trvl_allow_risky_flight_offers: bool
     trvl_require_configured_currency: bool
+    trvl_broad_discovery_enabled: bool
+    trvl_broad_include_one_way_fallbacks: bool
+    trvl_broad_max_alternatives: int
+    trvl_broad_allow_risky_alternatives: bool
 
 
 def load_source_config() -> SourceConfig:
@@ -183,4 +187,8 @@ def load_source_config() -> SourceConfig:
         trvl_currency=env_value("TRVL_CURRENCY", "USD").strip() or "USD",
         trvl_allow_risky_flight_offers=env_bool("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", False),
         trvl_require_configured_currency=env_bool("TRVL_REQUIRE_CONFIGURED_CURRENCY", True),
+        trvl_broad_discovery_enabled=env_bool("TRVL_BROAD_DISCOVERY_ENABLED", False),
+        trvl_broad_include_one_way_fallbacks=env_bool("TRVL_BROAD_INCLUDE_ONE_WAY_FALLBACKS", True),
+        trvl_broad_max_alternatives=int(env_value("TRVL_BROAD_MAX_ALTERNATIVES", "50")),
+        trvl_broad_allow_risky_alternatives=env_bool("TRVL_BROAD_ALLOW_RISKY_ALTERNATIVES", True),
     )
