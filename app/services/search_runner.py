@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from app.adapters import amadeus, google_places, mock_travel, searxng, serpapi_travel
+from app.adapters import amadeus, fast_flights_adapter, google_places, mock_travel, searxng, serpapi_travel
 from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
 from app.db.session import get_engine
 from app.services.package_builder import build_deal_candidates
@@ -90,6 +90,16 @@ def _run_real_sources(
         statuses.append(
             _persist_adapter_result(session, search_run_id, "serpapi_google_flights", "flight", serpapi_query, serpapi_result)
         )
+
+        fast_flights_query = {"source_name": "fast_flights", "result_type": "flight", "query": query}
+        fast_flights_result = fast_flights_adapter.search_fast_flights(
+            query,
+            enabled=config.fast_flights_enabled,
+            fetch_mode=config.fast_flights_fetch_mode,
+            seat=config.fast_flights_seat,
+            max_stops=config.fast_flights_max_stops,
+        )
+        statuses.append(_persist_adapter_result(session, search_run_id, "fast_flights", "flight", fast_flights_query, fast_flights_result))
 
         flight_query = {"source_name": "amadeus", "result_type": "flight", "query": query}
         flight_result = amadeus_client.flight_offers_search(query)

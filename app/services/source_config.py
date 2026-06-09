@@ -44,6 +44,16 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_int_optional(name: str) -> int | None:
+    value = env_value(name, "").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class SourceConfig:
     searxng_base_url: str
@@ -60,6 +70,10 @@ class SourceConfig:
     serpapi_api_key: str
     serpapi_base_url: str
     serpapi_timeout_seconds: float
+    fast_flights_enabled: bool
+    fast_flights_fetch_mode: str
+    fast_flights_seat: str
+    fast_flights_max_stops: int | None
 
 
 def load_source_config() -> SourceConfig:
@@ -78,4 +92,8 @@ def load_source_config() -> SourceConfig:
         serpapi_api_key=env_value("SERPAPI_API_KEY", "").strip(),
         serpapi_base_url=env_value("SERPAPI_BASE_URL", "https://serpapi.com/search").strip(),
         serpapi_timeout_seconds=env_float("SERPAPI_TIMEOUT_SECONDS", 8.0),
+        fast_flights_enabled=env_bool("FAST_FLIGHTS_ENABLED", False),
+        fast_flights_fetch_mode=env_value("FAST_FLIGHTS_FETCH_MODE", "common").strip(),
+        fast_flights_seat=env_value("FAST_FLIGHTS_SEAT", "economy").strip(),
+        fast_flights_max_stops=env_int_optional("FAST_FLIGHTS_MAX_STOPS"),
     )

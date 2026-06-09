@@ -788,6 +788,41 @@ def test_search_run_detail_renders_serpapi_provider_link_metadata(session):
     assert b"View source price" in response.body
 
 
+def test_search_run_detail_renders_fast_flights_provider_link_metadata(session):
+    vacation = create_vacation(session, hotel_needed=False, airfare_needed=True)
+    search_run = run_search_once(vacation.id, "manual", session=session, use_mock=False)
+    source_result(
+        session,
+        search_run.id,
+        "flight",
+        {
+            "source_name": "fast_flights",
+            "result_type": "flight",
+            "offers": [
+                {
+                    "source_name": "fast_flights",
+                    "result_type": "flight",
+                    "provider": "American",
+                    "label": "American PIT to ORD",
+                    "total_price": 296,
+                    "currency": "USD",
+                    "search_reference_url": "https://www.google.com/search?q=American+flight+PIT+ORD",
+                    "link_type": "search_reference",
+                    "link_label": "Search reference",
+                }
+            ],
+        },
+        source_name="fast_flights",
+    )
+
+    response = search_run_detail(search_run.id, request=None, session=session)
+
+    assert response.status_code == 200
+    assert b"American" in response.body
+    assert b"fast_flights" in response.body
+    assert b"Search reference" in response.body
+
+
 def test_price_history_endpoint_page_returns_graph_data(session):
     vacation = create_vacation(session, hotel_needed=False, airfare_needed=True)
     run_search_once(vacation.id, "manual", session=session)

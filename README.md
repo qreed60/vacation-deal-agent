@@ -84,8 +84,32 @@ by git and should not be committed.
 - `SERPAPI_API_KEY`
 - `SERPAPI_BASE_URL`
 - `SERPAPI_TIMEOUT_SECONDS`
+- `FAST_FLIGHTS_ENABLED` optional free/unofficial flight source, default `false`
+- `FAST_FLIGHTS_FETCH_MODE` defaults to `common`; unsafe fallback/browser modes are forced back to `common`
+- `FAST_FLIGHTS_SEAT` defaults to `economy`
+- `FAST_FLIGHTS_MAX_STOPS` optional integer
 - `FREE_TRAVEL_PROBE_FLIGHTS_SKILL_COMMAND` optional local JSON command for the isolated free-source probe
 - `FREE_TRAVEL_PROBE_TRAVEL_HACKING_TOOLKIT_COMMAND` optional local JSON command for the isolated free-source probe
+
+## Optional fast-flights Source
+
+`fast-flights` can be enabled as an optional real airfare source:
+
+```bash
+python -m pip install fast-flights
+FAST_FLIGHTS_ENABLED=true python scripts/run_search_once.py --vacation-id 1 --use-real-sources
+```
+
+The source is disabled by default. It does not require SerpAPI or another paid
+API key. The adapter uses only `fetch_mode=common`; fallback, force-fallback,
+and local modes are not used because they may trigger browser automation.
+
+`fast-flights` is a free and unofficial source, so route coverage can be fragile.
+It creates priced snapshots only when the upstream result contains both a real
+provider and a numeric price. Links are generated as `Search reference` links,
+not exact booking links or exact price guarantees. Hotels and rental cars still
+require separate structured sources. Phase 5 automation should wait until this
+source behavior is accepted for the trips being monitored.
 
 ## Free-Source Probe
 
@@ -207,6 +231,7 @@ Implemented:
 - Amadeus hotel list and hotel offer lookup adapters
 - Basic Google Places Text Search and Place Details normalization
 - Optional SerpAPI Google Flights and Google Hotels adapter for structured broad flight/hotel price results
+- Optional fast-flights adapter for free/unofficial structured airfare price results
 - Real-source integration in the existing Phase 2 search runner
 - CLI flags for `--use-real-sources` and `--use-mock`
 - Source statuses: `completed`, `skipped`, `error`, and `mock`
