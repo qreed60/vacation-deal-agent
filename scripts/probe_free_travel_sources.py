@@ -63,8 +63,11 @@ def _print_summary(report: dict) -> None:
             print(f"  install_hint={result['install_hint']}")
         if result.get("error"):
             print(f"  error={result['error']}")
-        for note in result.get("notes") or []:
+        notes = result.get("notes") or []
+        for note in notes[:5]:
             print(f"  note={note}")
+        if len(notes) > 5:
+            print(f"  note=... {len(notes) - 5} more note(s) in report")
 
 
 def main() -> int:

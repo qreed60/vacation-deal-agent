@@ -157,6 +157,7 @@ def test_fast_flights_v2_result_with_provider_price_is_usable(monkeypatch):
     assert result.status == "usable"
     assert result.provider == "Delta Air Lines"
     assert result.total_price == 425.0
+    assert result.currency == "USD"
     assert "fetch_mode=common" in result.notes
 
 
@@ -262,6 +263,196 @@ def test_fast_flights_get_flights_exception_becomes_failed(monkeypatch):
     assert "upstream changed response" in result.error
     assert "api_style=v2" in result.notes
     assert "fetch_mode=common" in result.notes
+
+
+def test_fast_flights_diagnostic_raw_includes_result_and_sample_public_fields(monkeypatch):
+    module = FakeFastFlightsModule(
+        FakeResult(
+            current_price="low",
+            flights=[FakeFlight(name="American", price="$296", _private="hidden", duration="2 hr")],
+        )
+    )
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="ORD", depart="2026-09-18")
+    )
+
+    assert result.diagnostic_raw["api_style"] == "v2"
+    assert result.diagnostic_raw["result_public_fields"]["current_price"] == "low"
+    assert result.diagnostic_raw["flight_count"] == 1
+    assert result.diagnostic_raw["sample_flights"][0]["public_fields"]["name"] == "American"
+    assert "_private" not in result.diagnostic_raw["sample_flights"][0]["public_fields"]
+    assert "price" in result.diagnostic_raw["sample_flights"][0]["field_names"]
+
+
+def test_fast_flights_diagnostic_raw_limits_sample_flights_to_five(monkeypatch):
+    module = FakeFastFlightsModule(
+        FakeResult(current_price="typical", flights=[FakeFlight(name="American", price=100 + index) for index in range(8)])
+    )
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="ORD", depart="2026-09-18")
+    )
+
+    assert result.diagnostic_raw["flight_count"] == 8
+    assert len(result.diagnostic_raw["sample_flights"]) == 5
+
+
+def test_nested_provider_extraction_from_segments_and_legs():
+    result = normalize_candidate_result(
+        "fast-flights",
+        {
+            "flights": [
+                {
+                    "price": "$296",
+                    "segments": [{"airline": "American"}, {"airline": "American"}],
+                },
+                {
+                    "price": "US$310",
+                    "legs": [{"carrier": "Delta"}, {"carrier": "United"}],
+                },
+            ]
+        },
+        "flight",
+        "PIT to ORD",
+    )
+
+    assert result.status == "usable"
+    assert result.provider == "American"
+    assert result.total_price == 296.0
+    assert result.currency == "USD"
+
+
+def test_multiple_nested_providers_are_joined_uniquely():
+    result = normalize_candidate_result(
+        "fast-flights",
+        {
+            "flights": [
+                {
+                    "price": "296 USD",
+                    "legs": [{"airline": "Delta"}, {"carrier": "United"}, {"carrier": "Delta"}],
+                }
+            ]
+        },
+        "flight",
+        "JFK to LAX",
+    )
+
+    assert result.status == "usable"
+    assert result.provider == "Delta, United"
+    assert result.total_price == 296.0
+    assert result.currency == "USD"
+
+
+def test_airport_codes_are_not_treated_as_providers():
+    result = normalize_candidate_result(
+        "fast-flights",
+        {"flights": [{"name": "JFK", "price": "$296"}, {"carrier": "LAX", "price": "$310"}]},
+        "flight",
+        "JFK to LAX",
+    )
+
+    assert result.status == "not_usable_for_pricing"
+    assert result.provider is None
+
+
+def test_us_dollar_price_strings_parse_as_usd():
+    dollar = normalize_candidate_result(
+        "fast-flights",
+        {"flights": [{"provider": "American", "price": "$296"}]},
+        "flight",
+        "PIT to ORD",
+    )
+    us_dollar = normalize_candidate_result(
+        "fast-flights",
+        {"flights": [{"provider": "American", "price_raw": "US$296"}]},
+        "flight",
+        "PIT to ORD",
+    )
+
+    assert dollar.total_price == 296.0
+    assert dollar.currency == "USD"
+    assert us_dollar.total_price == 296.0
+    assert us_dollar.currency == "USD"
+
+
+def test_repeated_no_provider_notes_are_collapsed_with_count():
+    result = normalize_candidate_result(
+        "fast-flights",
+        {"flights": [{"price": 100}, {"price": 200}, {"price": 300}]},
+        "flight",
+        "JFK to LAX",
+    )
+
+    assert result.status == "not_usable_for_pricing"
+    assert result.notes == ["Structured price was present without provider on 3 result(s)."]
+
+
+def test_huge_upstream_html_error_is_truncated(monkeypatch):
+    huge_error = "No flights found:\n" + ("<html>body</html>\n" * 300)
+    module = FakeFastFlightsModule(error=RuntimeError(huge_error))
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="MCO", depart="2026-09-18")
+    )
+
+    assert result.status == "failed"
+    assert len(result.error) < len(huge_error)
+    assert result.error.endswith("[truncated]")
+    assert len(result.diagnostic_error_excerpt) <= 1815
+
+
+def test_pit_ord_style_mocked_result_remains_usable(monkeypatch):
+    module = FakeFastFlightsModule(FakeResult(current_price="typical", flights=[FakeFlight(name="American", price="$296")]))
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="ORD", depart="2026-09-18")
+    )
+
+    assert result.status == "usable"
+    assert result.provider == "American"
+    assert result.total_price == 296.0
+
+
+def test_jfk_lax_style_mocked_result_with_nested_provider_becomes_usable(monkeypatch):
+    module = FakeFastFlightsModule(
+        FakeResult(
+            current_price="low",
+            flights=[FakeFlight(price_raw="US$296", flight_details={"segments": [{"airline": "JetBlue"}]})],
+        )
+    )
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="JFK", destination="LAX", depart="2026-09-18")
+    )
+
+    assert result.status == "usable"
+    assert result.provider == "JetBlue"
+    assert result.total_price == 296.0
+
+
+def test_jfk_lax_style_mocked_result_with_price_but_no_provider_stays_not_usable(monkeypatch):
+    module = FakeFastFlightsModule(
+        FakeResult(
+            current_price="low",
+            flights=[FakeFlight(price="$296", duration="6 hr"), FakeFlight(price="$310", stops=0)],
+        )
+    )
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="JFK", destination="LAX", depart="2026-09-18")
+    )
+
+    assert result.status == "not_usable_for_pricing"
+    assert result.total_price is None
+    assert result.diagnostic_raw["flight_count"] == 2
+    assert result.diagnostic_raw["sample_flights"][0]["public_fields"]["price"] == "$296"
 
 
 def test_normalized_hotel_result_with_provider_price_is_usable():

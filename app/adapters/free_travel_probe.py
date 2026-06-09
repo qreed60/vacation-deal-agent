@@ -11,6 +11,8 @@ import shlex
 import shutil
 import subprocess
 import time
+import re
+from collections import Counter
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +67,8 @@ class CandidateProbeResult:
     error: str | None = None
     install_hint: str | None = None
     raw_result: Any | None = None
+    diagnostic_raw: dict[str, Any] | None = None
+    diagnostic_error_excerpt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -124,7 +128,29 @@ def _first_string(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _price_value(payload: dict[str, Any]) -> float | None:
+def _parse_price(value: Any) -> tuple[float | None, str | None]:
+    if value in (None, ""):
+        return None, None
+    if isinstance(value, dict):
+        return _price_and_currency(value)
+    if isinstance(value, (int, float)):
+        return float(value), None
+    text = str(value).strip()
+    currency = None
+    if "$" in text or "US$" in text.upper():
+        currency = "USD"
+    elif "USD" in text.upper():
+        currency = "USD"
+    match = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", text)
+    if not match:
+        return None, currency
+    try:
+        return float(match.group(0).replace(",", "")), currency
+    except ValueError:
+        return None, currency
+
+
+def _price_and_currency(payload: dict[str, Any]) -> tuple[float | None, str | None]:
     for key in (
         "total_price",
         "price",
@@ -137,27 +163,40 @@ def _price_value(payload: dict[str, Any]) -> float | None:
         "extracted_lowest",
     ):
         value = payload.get(key)
-        if value in (None, ""):
-            continue
-        if isinstance(value, dict):
-            nested = _price_value(value)
-            if nested is not None:
-                return nested
-            continue
-        try:
-            return float(str(value).replace("$", "").replace(",", "").strip())
-        except ValueError:
-            continue
-    return None
+        price, currency = _parse_price(value)
+        if price is not None:
+            return price, currency
+    return None, None
+
+
+def _price_value(payload: dict[str, Any]) -> float | None:
+    return _price_and_currency(payload)[0]
+
+
+def _has_price_field(payload: dict[str, Any]) -> bool:
+    return any(
+        key in payload
+        for key in (
+            "total_price",
+            "price",
+            "price_raw",
+            "amount",
+            "total",
+            "fare",
+            "cost",
+            "extracted_price",
+            "extracted_lowest",
+        )
+    )
 
 
 def _currency(payload: dict[str, Any]) -> str | None:
     currency = _first_string(payload, ("currency", "currency_code"))
     if currency:
         return currency.upper()
-    price = payload.get("price")
-    if isinstance(price, str) and "$" in price:
-        return "USD"
+    _, price_currency = _price_and_currency(payload)
+    if price_currency:
+        return price_currency
     return None
 
 
@@ -176,6 +215,106 @@ def _concise_error(value: str, limit: int = 1200) -> str:
     return f"{text[:limit].rstrip()}... [truncated]"
 
 
+def _truncate_string(value: str, limit: int = 1000) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit].rstrip()}... [truncated]"
+
+
+def _field_names(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        return sorted(str(key) for key in value if not str(key).startswith("_"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return sorted(str(key) for key in asdict(value).keys() if not str(key).startswith("_"))
+    if hasattr(value, "model_dump"):
+        with contextlib.suppress(Exception):
+            return sorted(str(key) for key in value.model_dump().keys() if not str(key).startswith("_"))
+    if hasattr(value, "dict"):
+        with contextlib.suppress(Exception):
+            return sorted(str(key) for key in value.dict().keys() if not str(key).startswith("_"))
+    if hasattr(value, "__dict__"):
+        return sorted(str(key) for key in vars(value) if not str(key).startswith("_"))
+    return []
+
+
+def _bounded_public_data(value: Any, *, max_depth: int = 3, max_items: int = 10) -> Any:
+    if max_depth < 0:
+        return _truncate_string(repr(value), 1000)
+    if isinstance(value, str):
+        return _truncate_string(value, 1000)
+    if isinstance(value, (int, float, bool, type(None))):
+        return value
+    if isinstance(value, list):
+        return [_bounded_public_data(item, max_depth=max_depth - 1, max_items=max_items) for item in value[:max_items]]
+    if isinstance(value, tuple):
+        return [_bounded_public_data(item, max_depth=max_depth - 1, max_items=max_items) for item in value[:max_items]]
+    if isinstance(value, dict):
+        return {
+            str(key): _bounded_public_data(item, max_depth=max_depth - 1, max_items=max_items)
+            for key, item in list(value.items())[:max_items]
+            if not str(key).startswith("_")
+        }
+    if is_dataclass(value) and not isinstance(value, type):
+        return _bounded_public_data(asdict(value), max_depth=max_depth, max_items=max_items)
+    if hasattr(value, "model_dump"):
+        with contextlib.suppress(Exception):
+            return _bounded_public_data(value.model_dump(), max_depth=max_depth, max_items=max_items)
+    if hasattr(value, "dict"):
+        with contextlib.suppress(Exception):
+            return _bounded_public_data(value.dict(), max_depth=max_depth, max_items=max_items)
+    if hasattr(value, "__dict__"):
+        return _bounded_public_data(
+            {key: item for key, item in vars(value).items() if not key.startswith("_")},
+            max_depth=max_depth,
+            max_items=max_items,
+        )
+    return _truncate_string(repr(value), 1000)
+
+
+def _fast_flights_diagnostic_raw(raw: Any, api_style: str) -> dict[str, Any]:
+    flights = getattr(raw, "flights", None)
+    if flights is None and isinstance(raw, dict):
+        flights = raw.get("flights")
+    flights = flights if isinstance(flights, list) else []
+    return {
+        "api_style": api_style,
+        "result_public_fields": _bounded_public_data(raw, max_depth=3),
+        "flight_count": len(flights),
+        "sample_flights": [
+            {
+                "public_fields": _bounded_public_data(flight, max_depth=3),
+                "field_names": _field_names(flight),
+                "repr": _truncate_string(repr(flight), 1000),
+            }
+            for flight in flights[:5]
+        ],
+    }
+
+
+def _looks_like_airport_code(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]{3}", value.strip()))
+
+
+def _looks_like_route(value: str) -> bool:
+    text = value.strip()
+    return bool(re.search(r"\b[A-Z]{3}\b\s*(?:to|->|-|→)\s*\b[A-Z]{3}\b", text, flags=re.IGNORECASE))
+
+
+def _looks_like_flight_number(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9]{2,3}\s*\d{1,4}[A-Z]?", value.strip()))
+
+
+def _valid_provider(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if _looks_like_airport_code(text) or _looks_like_route(text) or _looks_like_flight_number(text):
+        return None
+    return text
+
+
 def _provider_value(payload: dict[str, Any]) -> str | None:
     for key in (
         "provider",
@@ -191,12 +330,40 @@ def _provider_value(payload: dict[str, Any]) -> str | None:
         if value in (None, ""):
             continue
         if isinstance(value, list):
-            labels = [str(item) for item in value if item]
+            labels = [_valid_provider(str(item)) for item in value if item]
+            labels = [label for label in labels if label]
             if labels:
-                return ", ".join(labels)
+                return ", ".join(dict.fromkeys(labels))
             continue
-        return str(value)
+        provider = _valid_provider(str(value))
+        if provider:
+            return provider
+    nested_providers: list[str] = []
+    for key in ("segments", "legs", "flights", "details", "itinerary", "flight_details"):
+        value = payload.get(key)
+        for nested in _iter_dicts(value):
+            nested_provider = _provider_value({nested_key: nested_value for nested_key, nested_value in nested.items() if nested_key != key})
+            if nested_provider:
+                for part in [item.strip() for item in nested_provider.split(",")]:
+                    if part and part not in nested_providers:
+                        nested_providers.append(part)
+    if nested_providers:
+        return ", ".join(nested_providers)
     return None
+
+
+def _dedupe_notes(notes: list[str]) -> list[str]:
+    counter = Counter(notes)
+    collapsed: list[str] = []
+    for note in dict.fromkeys(notes):
+        count = counter[note]
+        if note == "Structured price was present, but no provider field was found." and count > 1:
+            collapsed.append(f"Structured price was present without provider on {count} result(s).")
+        elif note == "Structured provider was present, but no reliable price field was found." and count > 1:
+            collapsed.append(f"Structured provider was present without reliable price on {count} result(s).")
+        else:
+            collapsed.append(note)
+    return collapsed
 
 
 def _iter_dicts(raw: Any) -> list[dict[str, Any]]:
@@ -245,6 +412,7 @@ def normalize_candidate_result(
             provider_code = _first_string(payload, ("provider_code", "airline_code", "carrier_code", "code"))
             source_url = _source_url(payload)
             result_label = label or _first_string(payload, ("label", "route", "itinerary_summary", "title", "name"))
+            currency = _currency(payload)
             return CandidateProbeResult(
                 candidate=candidate,
                 status="usable",
@@ -253,7 +421,7 @@ def normalize_candidate_result(
                 provider_code=provider_code,
                 label=result_label,
                 total_price=price,
-                currency=_currency(payload) or "USD",
+                currency=currency,
                 departure=_first_string(payload, ("departure", "depart", "departure_time", "check_in")),
                 arrival=_first_string(payload, ("arrival", "arrival_time", "check_out")),
                 source_url=source_url,
@@ -262,13 +430,13 @@ def normalize_candidate_result(
                 link_label="View source price" if source_url else None,
                 raw_result_available=raw_available,
                 raw_result=scrub_secrets(raw),
-                notes=notes,
+                notes=_dedupe_notes(notes),
                 stdout=scrub_secrets(stdout),
                 stderr=scrub_secrets(stderr),
             )
         if price is not None and not provider:
             notes.append("Structured price was present, but no provider field was found.")
-        if provider and price is None:
+        if provider and price is None and _has_price_field(payload):
             notes.append("Structured provider was present, but no reliable price field was found.")
 
     return CandidateProbeResult(
@@ -278,7 +446,7 @@ def normalize_candidate_result(
         label=label,
         raw_result_available=raw_available,
         raw_result=scrub_secrets(raw) if raw_available else None,
-        notes=notes or ["No structured provider and total price pair was found."],
+        notes=_dedupe_notes(notes) or ["No structured provider and total price pair was found."],
         stdout=scrub_secrets(stdout),
         stderr=scrub_secrets(stderr),
     )
@@ -309,6 +477,7 @@ def _failed(
         raw_result_available=False,
         notes=notes or [],
         error=scrub_secrets(_concise_error(str(exc))),
+        diagnostic_error_excerpt=scrub_secrets(_concise_error(str(exc), limit=1800)),
         stdout=scrub_secrets(stdout),
         stderr=scrub_secrets(stderr),
     )
@@ -335,6 +504,7 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
         return missing_dependency("fast-flights", "flight", "Install the optional fast-flights package in the active environment.")
     stdout = io.StringIO()
     stderr = io.StringIO()
+    api_style = "v2"
     notes = ["api_style=v2", "fetch_mode=common"]
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -367,6 +537,7 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
                     max_stops=None,
                 )
             elif hasattr(module, "search"):
+                api_style = "search"
                 notes = ["api_style=search"]
                 raw = module.search(
                     origin=request.origin,
@@ -387,6 +558,20 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
                 )
     except Exception as exc:
         return _failed("fast-flights", "flight", exc, stdout.getvalue(), stderr.getvalue(), notes)
+    diagnostic_raw = _fast_flights_diagnostic_raw(raw, api_style)
+    if api_style == "v2" and diagnostic_raw["flight_count"] == 0:
+        return CandidateProbeResult(
+            candidate="fast-flights",
+            status="failed",
+            component_type="flight",
+            label=f"{request.origin} to {request.destination}",
+            raw_result_available=True,
+            notes=notes + ["No flight objects were returned."],
+            stdout=scrub_secrets(stdout.getvalue()),
+            stderr=scrub_secrets(stderr.getvalue()),
+            error="No flight objects were returned.",
+            diagnostic_raw=scrub_secrets(diagnostic_raw),
+        )
     result = normalize_candidate_result(
         "fast-flights",
         _object_to_data(raw),
@@ -396,6 +581,8 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
         stderr=stderr.getvalue(),
     )
     result.notes = notes + result.notes
+    result.diagnostic_raw = scrub_secrets(diagnostic_raw)
+    result.raw_result = None
     return result
 
 
