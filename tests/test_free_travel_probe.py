@@ -7,9 +7,81 @@ from app.adapters.free_travel_probe import (
     CandidateProbeResult,
     ProbeRequest,
     normalize_candidate_result,
+    probe_fast_flights,
     probe_candidate,
     run_probe,
 )
+
+
+class FakeFastFlightsModule:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+        self.created_legs = []
+        self.create_filter_called = False
+
+    def FlightData(self, *, date, from_airport, to_airport, max_stops=None):
+        leg = {
+            "date": date,
+            "from_airport": from_airport,
+            "to_airport": to_airport,
+            "max_stops": max_stops,
+        }
+        self.created_legs.append(leg)
+        return leg
+
+    def Passengers(self, *, adults=0, children=0, infants_in_seat=0, infants_on_lap=0):
+        return {
+            "adults": adults,
+            "children": children,
+            "infants_in_seat": infants_in_seat,
+            "infants_on_lap": infants_on_lap,
+        }
+
+    def create_filter(self, **kwargs):
+        self.create_filter_called = True
+        raise AssertionError(f"create_filter should not be called: {kwargs}")
+
+    def get_flights(
+        self,
+        *,
+        flight_data,
+        trip,
+        passengers,
+        seat,
+        fetch_mode="common",
+        max_stops=None,
+    ):
+        self.calls.append(
+            {
+                "flight_data": flight_data,
+                "trip": trip,
+                "passengers": passengers,
+                "seat": seat,
+                "fetch_mode": fetch_mode,
+                "max_stops": max_stops,
+            }
+        )
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class FakeFlight:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class FakeResult:
+    def __init__(self, *, current_price, flights):
+        self.current_price = current_price
+        self.flights = flights
+
+
+def install_fake_fast_flights(monkeypatch, module):
+    monkeypatch.setattr(free_travel_probe, "_module_exists", lambda name: name == "fast_flights")
+    monkeypatch.setattr(free_travel_probe.importlib, "import_module", lambda name: module)
 
 
 def test_probe_cli_help_works():
@@ -59,6 +131,137 @@ def test_normalized_flight_result_with_provider_price_is_usable():
     assert result.provider_code == "DL"
     assert result.total_price == 425.0
     assert result.currency == "USD"
+
+
+def test_fast_flights_v2_result_with_provider_price_is_usable(monkeypatch):
+    module = FakeFastFlightsModule(
+        FakeResult(
+            current_price="low",
+            flights=[FakeFlight(name="Delta Air Lines", price="$425", departure="PIT 06:00", arrival="MOT 12:00")],
+        )
+    )
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(
+            candidate="fast-flights",
+            origin="PIT",
+            destination="MOT",
+            depart="2026-09-18",
+            return_date="2026-09-21",
+            adults=2,
+            children=3,
+        )
+    )
+
+    assert result.status == "usable"
+    assert result.provider == "Delta Air Lines"
+    assert result.total_price == 425.0
+    assert "fetch_mode=common" in result.notes
+
+
+def test_fast_flights_get_flights_receives_common_fetch_mode_and_no_create_filter(monkeypatch):
+    module = FakeFastFlightsModule(FakeResult(current_price="low", flights=[FakeFlight(provider="United", price=500)]))
+    install_fake_fast_flights(monkeypatch, module)
+
+    probe_fast_flights(
+        ProbeRequest(
+            candidate="fast-flights",
+            origin="PIT",
+            destination="MOT",
+            depart="2026-09-18",
+            return_date="2026-09-21",
+            adults=2,
+            children=3,
+        )
+    )
+
+    assert module.create_filter_called is False
+    assert module.calls[0]["fetch_mode"] == "common"
+    assert module.calls[0]["seat"] == "economy"
+    assert module.calls[0]["max_stops"] is None
+
+
+def test_fast_flights_round_trip_produces_two_flight_data_legs(monkeypatch):
+    module = FakeFastFlightsModule(FakeResult(current_price="low", flights=[FakeFlight(provider="United", price=500)]))
+    install_fake_fast_flights(monkeypatch, module)
+
+    probe_fast_flights(
+        ProbeRequest(
+            candidate="fast-flights",
+            origin="PIT",
+            destination="MOT",
+            depart="2026-09-18",
+            return_date="2026-09-21",
+        )
+    )
+
+    assert module.calls[0]["trip"] == "round-trip"
+    assert module.calls[0]["flight_data"] == [
+        {"date": "2026-09-18", "from_airport": "PIT", "to_airport": "MOT", "max_stops": None},
+        {"date": "2026-09-21", "from_airport": "MOT", "to_airport": "PIT", "max_stops": None},
+    ]
+
+
+def test_fast_flights_one_way_produces_one_flight_data_leg(monkeypatch):
+    module = FakeFastFlightsModule(FakeResult(current_price="low", flights=[FakeFlight(provider="United", price=500)]))
+    install_fake_fast_flights(monkeypatch, module)
+
+    probe_fast_flights(
+        ProbeRequest(
+            candidate="fast-flights",
+            origin="PIT",
+            destination="MOT",
+            depart="2026-09-18",
+        )
+    )
+
+    assert module.calls[0]["trip"] == "one-way"
+    assert module.calls[0]["flight_data"] == [
+        {"date": "2026-09-18", "from_airport": "PIT", "to_airport": "MOT", "max_stops": None},
+    ]
+
+
+def test_fast_flights_current_price_is_not_used_as_total_price(monkeypatch):
+    module = FakeFastFlightsModule(FakeResult(current_price="low", flights=[FakeFlight(provider="Delta Air Lines")]))
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="MOT", depart="2026-09-18")
+    )
+
+    assert result.status == "not_usable_for_pricing"
+    assert result.total_price is None
+    assert "current_price" not in "".join(result.notes)
+
+
+def test_fast_flights_provider_without_parseable_price_is_not_usable(monkeypatch):
+    module = FakeFastFlightsModule(
+        FakeResult(current_price="low", flights=[FakeFlight(provider="Delta Air Lines", price="low")])
+    )
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="MOT", depart="2026-09-18")
+    )
+
+    assert result.status == "not_usable_for_pricing"
+    assert result.provider is None
+    assert result.total_price is None
+
+
+def test_fast_flights_get_flights_exception_becomes_failed(monkeypatch):
+    module = FakeFastFlightsModule(error=RuntimeError("upstream changed response"))
+    install_fake_fast_flights(monkeypatch, module)
+
+    result = probe_fast_flights(
+        ProbeRequest(candidate="fast-flights", origin="PIT", destination="MOT", depart="2026-09-18")
+    )
+
+    assert result.status == "failed"
+    assert "upstream changed response" in result.error
+    assert "api_style=v2" in result.notes
+    assert "fetch_mode=common" in result.notes
 
 
 def test_normalized_hotel_result_with_provider_price_is_usable():

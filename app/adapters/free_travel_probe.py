@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -10,7 +11,7 @@ import shlex
 import shutil
 import subprocess
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,7 @@ class CandidateProbeResult:
     stderr: str = ""
     error: str | None = None
     install_hint: str | None = None
+    raw_result: Any | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -126,6 +128,7 @@ def _price_value(payload: dict[str, Any]) -> float | None:
     for key in (
         "total_price",
         "price",
+        "price_raw",
         "amount",
         "total",
         "fare",
@@ -165,6 +168,37 @@ def _source_url(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _concise_error(value: str, limit: int = 1200) -> str:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    text = "\n".join(lines)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}... [truncated]"
+
+
+def _provider_value(payload: dict[str, Any]) -> str | None:
+    for key in (
+        "provider",
+        "airline",
+        "airline_name",
+        "airlines",
+        "carrier",
+        "name",
+        "hotel_name",
+        "title",
+    ):
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, list):
+            labels = [str(item) for item in value if item]
+            if labels:
+                return ", ".join(labels)
+            continue
+        return str(value)
+    return None
+
+
 def _iter_dicts(raw: Any) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     if isinstance(raw, dict):
@@ -198,24 +232,14 @@ def normalize_candidate_result(
             component_type=component_type,
             label=label,
             raw_result_available=True,
+            raw_result=scrub_secrets(raw),
             notes=["Candidate returned text or non-JSON data without reliable structured price fields."],
             stdout=scrub_secrets(stdout),
             stderr=scrub_secrets(stderr),
         )
 
     for payload in dicts:
-        provider = _first_string(
-            payload,
-            (
-                "provider",
-                "airline",
-                "airline_name",
-                "carrier",
-                "name",
-                "hotel_name",
-                "title",
-            ),
-        )
+        provider = _provider_value(payload)
         price = _price_value(payload)
         if provider and price is not None:
             provider_code = _first_string(payload, ("provider_code", "airline_code", "carrier_code", "code"))
@@ -237,6 +261,7 @@ def normalize_candidate_result(
                 link_type="exact_source" if source_url else "none",
                 link_label="View source price" if source_url else None,
                 raw_result_available=raw_available,
+                raw_result=scrub_secrets(raw),
                 notes=notes,
                 stdout=scrub_secrets(stdout),
                 stderr=scrub_secrets(stderr),
@@ -252,6 +277,7 @@ def normalize_candidate_result(
         component_type=component_type,
         label=label,
         raw_result_available=raw_available,
+        raw_result=scrub_secrets(raw) if raw_available else None,
         notes=notes or ["No structured provider and total price pair was found."],
         stdout=scrub_secrets(stdout),
         stderr=scrub_secrets(stderr),
@@ -268,13 +294,21 @@ def missing_dependency(candidate: str, component_type: str, install_hint: str) -
     )
 
 
-def _failed(candidate: str, component_type: str, exc: Exception, stdout: str = "", stderr: str = "") -> CandidateProbeResult:
+def _failed(
+    candidate: str,
+    component_type: str,
+    exc: Exception,
+    stdout: str = "",
+    stderr: str = "",
+    notes: list[str] | None = None,
+) -> CandidateProbeResult:
     return CandidateProbeResult(
         candidate=candidate,
         status="failed",
         component_type=component_type,
         raw_result_available=False,
-        error=scrub_secrets(str(exc)),
+        notes=notes or [],
+        error=scrub_secrets(_concise_error(str(exc))),
         stdout=scrub_secrets(stdout),
         stderr=scrub_secrets(stderr),
     )
@@ -301,10 +335,21 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
         return missing_dependency("fast-flights", "flight", "Install the optional fast-flights package in the active environment.")
     stdout = io.StringIO()
     stderr = io.StringIO()
+    notes = ["api_style=v2", "fetch_mode=common"]
     try:
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             module = importlib.import_module("fast_flights")
-            if all(hasattr(module, name) for name in ("FlightData", "Passengers", "create_filter", "get_flights")):
+            if all(hasattr(module, name) for name in ("FlightData", "Passengers", "get_flights")):
+                signature = inspect.signature(module.get_flights)
+                if not {"flight_data", "trip", "passengers", "seat"}.issubset(signature.parameters):
+                    return _unsupported(
+                        "fast-flights",
+                        "flight",
+                        "unsupported_api_shape",
+                        "fast_flights is installed, but get_flights does not match the supported v2 keyword API.",
+                        stdout.getvalue(),
+                        stderr.getvalue(),
+                    )
                 flight_data = [
                     module.FlightData(date=request.depart, from_airport=request.origin, to_airport=request.destination),
                 ]
@@ -313,15 +358,16 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
                         module.FlightData(date=request.return_date, from_airport=request.destination, to_airport=request.origin)
                     )
                 passengers = module.Passengers(adults=request.adults, children=request.children)
-                flight_filter = module.create_filter(
+                raw = module.get_flights(
                     flight_data=flight_data,
                     trip="round-trip" if request.return_date else "one-way",
-                    seat="economy",
                     passengers=passengers,
-                    fetch_mode="fallback",
+                    seat="economy",
+                    fetch_mode="common",
+                    max_stops=None,
                 )
-                raw = module.get_flights(flight_filter)
             elif hasattr(module, "search"):
+                notes = ["api_style=search"]
                 raw = module.search(
                     origin=request.origin,
                     destination=request.destination,
@@ -340,8 +386,8 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
                     stderr.getvalue(),
                 )
     except Exception as exc:
-        return _failed("fast-flights", "flight", exc, stdout.getvalue(), stderr.getvalue())
-    return normalize_candidate_result(
+        return _failed("fast-flights", "flight", exc, stdout.getvalue(), stderr.getvalue(), notes)
+    result = normalize_candidate_result(
         "fast-flights",
         _object_to_data(raw),
         "flight",
@@ -349,17 +395,27 @@ def probe_fast_flights(request: ProbeRequest) -> CandidateProbeResult:
         stdout=stdout.getvalue(),
         stderr=stderr.getvalue(),
     )
+    result.notes = notes + result.notes
+    return result
 
 
 def _object_to_data(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool, type(None), list, dict)):
+    if isinstance(value, (str, int, float, bool, type(None))):
         return value
+    if isinstance(value, list):
+        return [_object_to_data(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _object_to_data(item) for key, item in value.items()}
+    if is_dataclass(value) and not isinstance(value, type):
+        return _object_to_data(asdict(value))
     if hasattr(value, "model_dump"):
-        return value.model_dump()
+        return _object_to_data(value.model_dump())
     if hasattr(value, "dict"):
-        return value.dict()
+        return _object_to_data(value.dict())
     if hasattr(value, "__dict__"):
-        return {key: _object_to_data(item) for key, item in vars(value).items() if not key.startswith("_")}
+        data = {key: _object_to_data(item) for key, item in vars(value).items() if not key.startswith("_")}
+        data.setdefault("raw_repr", repr(value))
+        return data
     return str(value)
 
 
