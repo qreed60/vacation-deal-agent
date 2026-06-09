@@ -696,10 +696,16 @@ def _raw_summary(raw: Any, stdout: str, stderr: str, exit_code: int, elapsed_sec
     return summary
 
 
-def _run_trvl(command: list[str], timeout_seconds: float) -> tuple[subprocess.CompletedProcess[str], float]:
+def _run_trvl(command: list[str], timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+    """Run a trvl command once and return the captured result with timing info.
+
+    The returned CompletedProcess has an ``elapsed_seconds`` attribute attached
+    so callers can inspect elapsed time without losing stdout/stderr/exit_code.
+    """
     start = time.monotonic()
     result = subprocess.run(command, text=True, capture_output=True, timeout=timeout_seconds, check=False)
-    return result, time.monotonic() - start
+    result.elapsed_seconds = time.monotonic() - start  # type: ignore[attr-defined]
+    return result
 
 
 def search_trvl_flights(
@@ -712,6 +718,10 @@ def search_trvl_flights(
     currency: str = DEFAULT_CURRENCY,
     preferred_airports: list | None = None,
     alternate_airports: list | None = None,
+    broad_discovery_enabled: bool = False,
+    broad_include_one_way_fallbacks: bool = True,
+    broad_max_alternatives: int = 50,
+    broad_allow_risky_alternatives: bool = True,
 ) -> dict[str, Any]:
     query_json = build_flight_query(query, currency=currency, preferred_airports=preferred_airports, alternate_airports=alternate_airports)
     if not enabled:
@@ -721,36 +731,128 @@ def search_trvl_flights(
         return _skip("TRVL_ENABLED=true but trvl binary was not found", "flight", query_json)
     if not query_json.get("origin_airport") or not query_json.get("destination_airport") or not query_json.get("departure_date"):
         return _skip("trvl flights requires resolved origin_airport, destination_airport, and departure_date", "flight", query_json)
-    command = [
+
+    has_return = bool(query_json.get("return_date"))
+
+    # ── Normal round-trip search (primary source of safe offers) ──────────
+    rt_command = [
         binary,
         "flights",
         str(query_json["origin_airport"]),
         str(query_json["destination_airport"]),
         str(query_json["departure_date"]),
     ]
-    if query_json.get("return_date"):
-        command.extend(["--return", str(query_json["return_date"])])
-    command.extend(["--adults", str(query_json["adults_arg"]), "--currency", currency, "--format", "json"])
-    try:
-        result, elapsed = _run_trvl(command, timeout_seconds)
-    except Exception as exc:
-        return _error(str(exc), "flight")
-    raw = _load_json_text(result.stdout)
-    raw_result = _raw_summary(raw, result.stdout, result.stderr, result.returncode, elapsed)
-    if result.returncode != 0 and not _success(raw):
-        return _error(f"trvl flights exited with code {result.returncode}", "flight", raw_result)
+    if has_return:
+        rt_command.extend(["--return", str(query_json["return_date"])])
+    rt_command.extend(["--adults", str(query_json["adults_arg"]), "--currency", currency, "--format", "json"])
+
     traveler_pricing_note = None
     if int(query_json["travelers_requested"] or 1) > 1 and int(query.get("children") or 0) > 0:
         traveler_pricing_note = "trvl flight search priced all travelers as adults because trvl CLI only exposes --adults"
+
+    # Run round-trip command (captured once, used everywhere)
+    rt_result = _run_trvl(rt_command, timeout_seconds)
+    rt_raw = _load_json_text(rt_result.stdout)
+    rt_raw_summary = _raw_summary(
+        rt_raw, rt_result.stdout, rt_result.stderr,
+        rt_result.returncode, getattr(rt_result, "elapsed_seconds", 0),
+    )
+
+    if rt_result.returncode != 0 and not _success(rt_raw):
+        return _error(f"trvl flights exited with code {rt_result.returncode}", "flight", rt_raw_summary)
+
+    # Normalize round-trip results as safe offers (existing behavior)
     normalized = normalize_flights(
-        raw,
+        rt_raw,
         query_json,
         max_results=max_results,
-        stderr=result.stderr,
-        command_metadata={"argv": command, "exit_code": result.returncode, "elapsed_seconds": round(elapsed, 3)},
+        stderr=rt_result.stderr,
+        command_metadata={
+            "argv": rt_command,
+            "exit_code": rt_result.returncode,
+            "elapsed_seconds": round(getattr(rt_result, "elapsed_seconds", 0), 3),
+        },
         traveler_pricing_note=traveler_pricing_note,
     )
-    return {"status": "completed", "normalized_result": normalized, "raw_result": raw_result, "error_message": None}
+
+    # ── Broad discovery (optional fallback) ────────────────────────────────
+    broad_alternatives: list[dict[str, Any]] = []
+    broad_summary: dict[str, Any] = {}
+    broad_skipped_reasons: list[dict[str, str]] = []
+
+    if broad_discovery_enabled and has_return:
+        # Store full command results (not just stdout/stderr) to avoid double-runs
+        one_way_results: list[tuple[str, subprocess.CompletedProcess[str], dict[str, Any]]] = []  # (search_type, result, query_json)
+
+        # Outbound one-way: ORIGIN -> DESTINATION on depart date
+        outbound_command = [
+            binary, "flights",
+            str(query_json["origin_airport"]),
+            str(query_json["destination_airport"]),
+            str(query_json["departure_date"]),
+            "--adults", str(query_json["adults_arg"]),
+            "--currency", currency, "--format", "json",
+        ]
+        outbound_result = _run_trvl(outbound_command, timeout_seconds)
+        one_way_results.append(("outbound_one_way", outbound_result, query_json))
+
+        # Return one-way: DESTINATION -> ORIGIN on return date
+        return_query_json = dict(query_json)
+        return_query_json["origin_airport"] = query_json["destination_airport"]
+        return_query_json["destination_airport"] = query_json["origin_airport"]
+        return_query_json["departure_date"] = query_json["return_date"]
+        return_query_json.pop("return_date", None)
+
+        return_command = [
+            binary, "flights",
+            str(return_query_json["origin_airport"]),
+            str(return_query_json["destination_airport"]),
+            str(return_query_json["departure_date"]),
+            "--adults", str(query_json["adults_arg"]),
+            "--currency", currency, "--format", "json",
+        ]
+        return_result = _run_trvl(return_command, timeout_seconds)
+        one_way_results.append(("return_one_way", return_result, return_query_json))
+
+        # Normalize each one-way search as broad alternatives (no double-runs)
+        for stype, cmd_result, bw_query in one_way_results:
+            bw_raw = _load_json_text(cmd_result.stdout)
+            bw_meta = {
+                "argv": cmd_result.args,
+                "exit_code": cmd_result.returncode,
+                "elapsed_seconds": round(getattr(cmd_result, "elapsed_seconds", 0), 3),
+            }
+
+            if broad_include_one_way_fallbacks or (stype == "outbound_one_way" and len(normalized.get("offers", [])) == 0):
+                bw_normalized = normalize_broad_alternatives(
+                    bw_raw,
+                    bw_query,
+                    search_type=stype,
+                    allow_risky=broad_allow_risky_alternatives,
+                    stderr=cmd_result.stderr,
+                    command_metadata=bw_meta,
+                )
+                broad_alternatives.append(bw_normalized)
+                broad_skipped_reasons.extend(bw_normalized.get("skipped_reasons", []))
+
+        # Build broad summary
+        total_broad = sum(a["raw_count"] for a in broad_alternatives)
+        total_broad_norm = sum(a["normalized_count"] for a in broad_alternatives)
+        broad_summary = {
+            "enabled": True,
+            "one_way_searches_run": len(one_way_results),
+            "total_raw_alternatives": total_broad,
+            "total_normalized_alternatives": total_broad_norm,
+            "search_types": [a["search_type"] for a in broad_alternatives],
+        }
+
+    # Merge broad data into normalized result diagnostics
+    if broad_alternatives:
+        normalized["broad_alternatives"] = broad_alternatives[:broad_max_alternatives]
+        normalized["broad_summary"] = broad_summary
+        normalized["broad_skipped_reasons"] = broad_skipped_reasons
+
+    return {"status": "completed", "normalized_result": normalized, "raw_result": rt_raw_summary, "error_message": None}
 
 
 def search_trvl_hotels(
@@ -788,10 +890,11 @@ def search_trvl_hotels(
         "json",
     ]
     try:
-        result, elapsed = _run_trvl(command, timeout_seconds)
+        result = _run_trvl(command, timeout_seconds)
     except Exception as exc:
         return _error(str(exc), "hotel")
     raw = _load_json_text(result.stdout)
+    elapsed = getattr(result, "elapsed_seconds", 0)
     raw_result = _raw_summary(raw, result.stdout, result.stderr, result.returncode, elapsed)
     if result.returncode != 0 and not _success(raw):
         return _error(f"trvl hotels exited with code {result.returncode}", "hotel", raw_result)
@@ -803,3 +906,126 @@ def search_trvl_hotels(
         command_metadata={"argv": command, "exit_code": result.returncode, "elapsed_seconds": round(elapsed, 3)},
     )
     return {"status": "completed", "normalized_result": normalized, "raw_result": raw_result, "error_message": None}
+
+
+def _clean_raw_airport_codes(raw: Any) -> Any:
+    """Recursively clean embedded quotes from airport codes and names in raw data."""
+    if isinstance(raw, dict):
+        cleaned: dict[str, Any] = {}
+        for key, value in raw.items():
+            if key in ("code", "name") and isinstance(value, str):
+                cleaned[key] = _clean_airport_code(value) or value
+            else:
+                cleaned[key] = _clean_raw_airport_codes(value)
+        return cleaned
+    if isinstance(raw, list):
+        return [_clean_raw_airport_codes(item) for item in raw]
+    return raw
+
+
+def normalize_broad_alternatives(
+    raw: Any,
+    query_json: dict[str, Any],
+    *,
+    search_type: str = "one_way",
+    allow_risky: bool = True,
+    stderr: str = "",
+    command_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Normalize broad discovery alternatives (one-way, risky, etc.).
+
+    Unlike normalize_flights, this function does NOT filter out risky offers.
+    It stores them separately under broad_alternatives so they are visible in
+    diagnostics but do not become normal best_deal candidates.
+    """
+    flights = _candidate_items(raw, ("flights", "offers", "results", "itineraries"))
+    alternatives: list[dict[str, Any]] = []
+    skipped_count = 0
+    skipped_reasons: list[dict[str, str]] = []
+
+    configured_currency = query_json.get("currency") or DEFAULT_CURRENCY
+    stderr_warnings = _stderr_warnings(stderr)
+
+    for flight in flights:
+        price, currency = _price_and_currency(
+            flight,
+            ("total_price", "totalPrice", "price", "amount", "fare", "cost", "extracted_price", "cheapest_price"),
+        )
+        provider, trvl_provider, cheapest_source = _flight_provider(flight)
+
+        if price is None or not currency:
+            skipped_count += 1
+            skipped_reasons.append({"reason": "missing_data", "provider": str(provider or ""), "search_type": search_type})
+            continue
+
+        if not provider:
+            skipped_count += 1
+            skipped_reasons.append({"reason": "no_provider", "search_type": search_type})
+            continue
+
+        departure, arrival = _flight_times(flight)
+        source_url = _source_url(flight)
+        flight_signature = _flight_number_signature(flight)
+
+        origin = query_json.get("origin_airport") or query_json.get("origin_value", "")
+        destination = query_json.get("destination_airport") or query_json.get("destination_value", "")
+        label_parts = [str(provider), str(origin), "to", str(destination)]
+        label = " ".join(part for part in label_parts if part)
+
+        is_one_way = search_type == "one_way"
+        is_risky = _is_risky_offer(flight, stderr_warnings)
+
+        offer = {
+            "component_type": "flight",
+            "component_type_label": "Airfare (Broad Alternative)",
+            "source_name": SOURCE_NAME,
+            "result_type": "flight",
+            "provider": provider,
+            "airline_name": provider,
+            "label": label,
+            "total_price": price,
+            "currency": currency,
+            "origin": origin,
+            "destination": destination,
+            "departure": departure,
+            "arrival": arrival,
+            "departure_date": query_json.get("departure_date"),
+            "return_date": None,
+            "duration": flight.get("duration"),
+            "stops": flight.get("stops"),
+            "flight_numbers": [flight_signature] if flight_signature else None,
+            "flight_signature": flight_signature,
+            "trvl_provider": trvl_provider,
+            "cheapest_source": cheapest_source,
+            "source_url": source_url,
+            "link_type": "exact_source" if source_url else "none",
+            "link_label": "View source price" if source_url else None,
+            "mock": False,
+            "search_type": search_type,
+            "is_risky": is_risky,
+            "raw_offer_reference": _clean_raw_airport_codes(_bounded_public_data(flight, max_depth=3, max_items=12)),
+        }
+
+        if is_one_way:
+            offer["offer_category"] = "one_way"
+        elif is_risky:
+            offer["offer_category"] = "risky_alternative"
+        else:
+            offer["offer_category"] = "safe_alternative"
+
+        alternatives.append(offer)
+
+    return {
+        "source_name": SOURCE_NAME,
+        "result_type": "flight",
+        "search_type": search_type,
+        "alternatives": alternatives,
+        "raw_count": len(flights),
+        "normalized_count": len(alternatives),
+        "skipped_count": skipped_count,
+        "skipped_reasons": skipped_reasons,
+        "stderr_warnings": stderr_warnings,
+        "command": _bounded_public_data(command_metadata or {}, max_depth=3, max_items=20),
+        "query": query_json,
+    }
+
