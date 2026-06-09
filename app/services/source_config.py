@@ -1,8 +1,69 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+
+# Small fallback city map for known common values.
+_FALLBACK_CITY_MAP: dict[str, str] = {
+    "Pittsburgh, PA": "PIT",
+    "Pittsburgh": "PIT",
+    "Minot, ND": "MOT",
+    "Minot": "MOT",
+    "Orlando, FL": "MCO",
+    "Orlando": "MCO",
+    "Chicago, IL": "ORD",
+    "Chicago": "ORD",
+    "New York, NY": "JFK",
+    "New York": "JFK",
+    "Los Angeles, CA": "LAX",
+    "Los Angeles": "LAX",
+}
+
+
+def _is_iata_code(value: str) -> bool:
+    """Check if a string looks like a 3-letter IATA airport code."""
+    return bool(re.fullmatch(r"[A-Z]{3}", value.strip()))
+
+
+def resolve_airport(raw_value: str, preferred_airports: list | None = None, alternate_airports: list | None = None) -> str | None:
+    """Resolve a raw origin/destination string to an IATA airport code.
+
+    Priority:
+      A. First entry in preferred_airports (if non-empty).
+      B. First entry in alternate_airports (if preferred is empty).
+      C. Raw value if it already looks like an IATA code.
+      D. Fallback city map lookup (case-insensitive).
+      E. None if unresolved.
+
+    Does not guess beyond the fallback map or call external geocoding APIs.
+    """
+    # A. preferred_airports
+    if preferred_airports:
+        first = str(preferred_airports[0]).strip().upper()
+        if _is_iata_code(first):
+            return first
+
+    # B. alternate_airports
+    if alternate_airports:
+        first = str(alternate_airports[0]).strip().upper()
+        if _is_iata_code(first):
+            return first
+
+    # C. Raw value is already IATA
+    stripped = raw_value.strip().upper()
+    if _is_iata_code(stripped):
+        return stripped
+
+    # D. Fallback city map (case-insensitive)
+    for key, code in _FALLBACK_CITY_MAP.items():
+        if raw_value.strip().lower() == key.lower():
+            return code
+
+    # E. Unresolved
+    return None
 
 
 def _load_dotenv(path: Path = Path(".env")) -> dict[str, str]:
@@ -54,6 +115,14 @@ def env_int_optional(name: str) -> int | None:
         return None
 
 
+def env_int(name: str, default: int = 0) -> int:
+    value = env_value(name, str(default)).strip()
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class SourceConfig:
     searxng_base_url: str
@@ -74,6 +143,7 @@ class SourceConfig:
     fast_flights_fetch_mode: str
     fast_flights_seat: str
     fast_flights_max_stops: int | None
+    fast_flights_max_results: int
 
 
 def load_source_config() -> SourceConfig:
@@ -96,4 +166,5 @@ def load_source_config() -> SourceConfig:
         fast_flights_fetch_mode=env_value("FAST_FLIGHTS_FETCH_MODE", "common").strip(),
         fast_flights_seat=env_value("FAST_FLIGHTS_SEAT", "economy").strip(),
         fast_flights_max_stops=env_int_optional("FAST_FLIGHTS_MAX_STOPS"),
+        fast_flights_max_results=int(env_value("FAST_FLIGHTS_MAX_RESULTS", "20")),
     )

@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from app.adapters import amadeus, fast_flights_adapter, google_places, mock_travel, searxng, serpapi_travel
 from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
 from app.db.session import get_engine
+from app.services.manifest_io import manifest_for_vacation
 from app.services.package_builder import build_deal_candidates
 from app.services.quote_normalizer import snapshots_from_source_result
 from app.services.search_planner import build_search_plan, deterministic_json
@@ -61,6 +62,7 @@ def _run_real_sources(
     query_entry: dict[str, Any],
     config: SourceConfig,
     amadeus_client: amadeus.AmadeusClient,
+    manifest: dict[str, Any] | None = None,
 ) -> list[str]:
     statuses: list[str] = []
     query = query_entry["query"]
@@ -92,12 +94,18 @@ def _run_real_sources(
         )
 
         fast_flights_query = {"source_name": "fast_flights", "result_type": "flight", "query": query}
+        manifest_data = manifest or {}
+        preferred = manifest_data.get("preferred_airports") or []
+        alternate = manifest_data.get("alternate_airports") or []
         fast_flights_result = fast_flights_adapter.search_fast_flights(
             query,
             enabled=config.fast_flights_enabled,
             fetch_mode=config.fast_flights_fetch_mode,
             seat=config.fast_flights_seat,
             max_stops=config.fast_flights_max_stops,
+            preferred_airports=preferred,
+            alternate_airports=alternate,
+            max_results=config.fast_flights_max_results,
         )
         statuses.append(_persist_adapter_result(session, search_run_id, "fast_flights", "flight", fast_flights_query, fast_flights_result))
 
@@ -206,6 +214,7 @@ def _run_with_session(
             enabled=config.amadeus_enabled,
             timeout_seconds=config.amadeus_timeout_seconds,
         )
+        manifest = manifest_for_vacation(vacation)
         for query_entry in plan["queries"]:
             if use_mock:
                 adapter_result = mock_travel.search(query_entry)
@@ -220,7 +229,7 @@ def _run_with_session(
                 status_counts[adapter_result["status"]] = status_counts.get(adapter_result["status"], 0) + 1
                 result_count += 1
             if use_real_sources:
-                real_statuses = _run_real_sources(session, search_run.id, query_entry, config, amadeus_client)
+                real_statuses = _run_real_sources(session, search_run.id, query_entry, config, amadeus_client, manifest=manifest)
                 result_count += len(real_statuses)
                 for status in real_statuses:
                     status_counts[status] = status_counts.get(status, 0) + 1

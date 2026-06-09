@@ -9,10 +9,13 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 from urllib.parse import quote_plus
 
+from app.services.source_config import resolve_airport
+
 
 SOURCE_NAME = "fast_flights"
 SAFE_FETCH_MODE = "common"
 SAFE_SEATS = {"economy", "premium-economy", "business", "first"}
+DEFAULT_MAX_RESULTS = 20
 
 
 def _skip(reason: str) -> dict[str, Any]:
@@ -317,16 +320,50 @@ def search_fast_flights(
     fetch_mode: str = SAFE_FETCH_MODE,
     seat: str = "economy",
     max_stops: int | None = None,
+    preferred_airports: list | None = None,
+    alternate_airports: list | None = None,
+    max_results: int = DEFAULT_MAX_RESULTS,
 ) -> dict[str, Any]:
     if not enabled:
         return _skip("FAST_FLIGHTS_ENABLED=false")
     if not _module_exists("fast_flights"):
         return _skip("fast-flights package is not installed")
-    origin = query.get("origin")
-    destination = query.get("destination")
+    origin_raw = query.get("origin")
+    destination_raw = query.get("destination")
     departure_date = query.get("start_date")
     return_date = query.get("end_date")
-    if not origin or not destination or not departure_date:
+
+    # Resolve IATA codes for fast-flights only
+    resolved_origin = resolve_airport(origin_raw, preferred_airports, alternate_airports) if origin_raw else None
+    resolved_destination = resolve_airport(destination_raw, preferred_airports, alternate_airports) if destination_raw else None
+
+    # Build query metadata with both original and resolved values
+    query_metadata = {
+        "origin_value": origin_raw,
+        "destination_value": destination_raw,
+        "departure_date": departure_date,
+        "return_date": return_date,
+        "adults": int(query.get("number_of_travelers") or 1),
+        "children": int(query.get("children", 0) or 0),
+    }
+    if resolved_origin:
+        query_metadata["origin_airport"] = resolved_origin
+    if resolved_destination:
+        query_metadata["destination_airport"] = resolved_destination
+
+    # If either airport is unresolved, return skipped
+    if not resolved_origin or not resolved_destination:
+        missing = []
+        if not resolved_origin:
+            missing.append("origin")
+        if not resolved_destination:
+            missing.append("destination")
+        return _skip(
+            f"fast-flights requires IATA airport codes; could not resolve {', '.join(missing)}. "
+            f"Origin value: {origin_raw!r}, destination value: {destination_raw!r}"
+        )
+
+    if not departure_date:
         return _skip("fast-flights requires origin, destination, and start_date")
 
     safe_fetch_mode, fetch_mode_note = _safe_fetch_mode(fetch_mode)
@@ -338,9 +375,9 @@ def search_fast_flights(
         signature = inspect.signature(module.get_flights)
         if not {"flight_data", "trip", "passengers", "seat"}.issubset(signature.parameters):
             return _skip("fast-flights get_flights API shape is unsupported")
-        flight_data = [module.FlightData(date=departure_date, from_airport=origin, to_airport=destination, max_stops=max_stops)]
+        flight_data = [module.FlightData(date=departure_date, from_airport=resolved_origin, to_airport=resolved_destination, max_stops=max_stops)]
         if return_date:
-            flight_data.append(module.FlightData(date=return_date, from_airport=destination, to_airport=origin, max_stops=max_stops))
+            flight_data.append(module.FlightData(date=return_date, from_airport=resolved_destination, to_airport=resolved_origin, max_stops=max_stops))
         passengers = module.Passengers(adults=max(1, int(query.get("number_of_travelers") or 1)), children=0)
         raw = module.get_flights(
             flight_data=flight_data,
@@ -353,9 +390,12 @@ def search_fast_flights(
     except Exception as exc:
         return _error(str(exc))
 
-    normalized = _normalize_flights(raw, query)
+    normalized = _normalize_flights(raw, query_metadata)
     if fetch_mode_note:
         normalized.setdefault("notes", []).append(fetch_mode_note)
+    # Attach resolved airport info for downstream consumers
+    normalized["resolved_origin_airport"] = resolved_origin
+    normalized["resolved_destination_airport"] = resolved_destination
     return {
         "status": "completed",
         "normalized_result": normalized,

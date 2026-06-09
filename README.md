@@ -104,12 +104,31 @@ The source is disabled by default. It does not require SerpAPI or another paid
 API key. The adapter uses only `fetch_mode=common`; fallback, force-fallback,
 and local modes are not used because they may trigger browser automation.
 
-`fast-flights` is a free and unofficial source, so route coverage can be fragile.
-It creates priced snapshots only when the upstream result contains both a real
-provider and a numeric price. Links are generated as `Search reference` links,
-not exact booking links or exact price guarantees. Hotels and rental cars still
-require separate structured sources. Phase 5 automation should wait until this
-source behavior is accepted for the trips being monitored.
+### Airport code resolution
+
+fast-flights requires IATA airport codes (e.g., `PIT`, `MOT`). The app resolves
+origin/destination using this priority:
+
+1. **preferred_airports** from the vacation manifest — first entry is used.
+2. **alternate_airports** from the vacation manifest — first entry when preferred is empty.
+3. Raw origin/destination value if it already looks like a 3-letter IATA code.
+4. A small fallback city map for known common values (e.g., `Pittsburgh, PA` → `PIT`, `Minot, ND` → `MOT`).
+
+If neither airport can be resolved, the fast-flights source returns a skipped
+result with a clear error message rather than guessing or calling external APIs.
+
+### Result bounding
+
+fast-flights result normalization is bounded by `FAST_FLIGHTS_MAX_RESULTS` (default: 20).
+Deduplication is applied first (by provider + price + departure + arrival + label),
+then the top N priced quotes are kept sorted by total_price ascending. All raw and
+diagnostic source data is preserved in the SourceResult row even when offers are limited.
+
+### Caveats
+
+- fast-flights is free/unofficial and may be route-fragile.
+- Search reference links (`link_type=search_reference`) are not booking links or exact price guarantees.
+- Hotels and rental cars still require separate structured sources.
 
 ## Free-Source Probe
 
