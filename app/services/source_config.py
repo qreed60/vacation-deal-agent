@@ -150,6 +150,8 @@ class SourceConfig:
     trvl_max_flight_results: int
     trvl_max_hotel_results: int
     trvl_currency: str
+    trvl_allow_risky_flight_offers: bool
+    trvl_require_configured_currency: bool
 
 
 def load_source_config() -> SourceConfig:
@@ -179,4 +181,6 @@ def load_source_config() -> SourceConfig:
         trvl_max_flight_results=int(env_value("TRVL_MAX_FLIGHT_RESULTS", "20")),
         trvl_max_hotel_results=int(env_value("TRVL_MAX_HOTEL_RESULTS", "20")),
         trvl_currency=env_value("TRVL_CURRENCY", "USD").strip() or "USD",
+        trvl_allow_risky_flight_offers=env_bool("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", False),
+        trvl_require_configured_currency=env_bool("TRVL_REQUIRE_CONFIGURED_CURRENCY", True),
     )

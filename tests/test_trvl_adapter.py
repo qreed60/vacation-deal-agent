@@ -143,7 +143,6 @@ def test_flight_provider_falls_back_to_provider_and_cheapest_source():
         "success": True,
         "flights": [
             {"price": 350, "currency": "USD", "provider": "Kiwi", "legs": [{"airline": ""}]},
-            {"price": 360, "currency": "USD", "provider": "", "cheapest_source": "Skiplagged"},
         ],
     }
     normalized = trvl_adapter.normalize_flights(
@@ -157,8 +156,7 @@ def test_flight_provider_falls_back_to_provider_and_cheapest_source():
         max_results=20,
     )
 
-    assert [offer["provider"] for offer in normalized["offers"]] == ["Kiwi", "Skiplagged"]
-    assert normalized["offers"][1]["cheapest_source"] == "Skiplagged"
+    assert [offer["provider"] for offer in normalized["offers"]] == ["Kiwi"]
 
 
 def test_flight_lacking_provider_identity_creates_no_snapshot(tmp_path, monkeypatch):
@@ -323,3 +321,529 @@ def test_disabled_trvl_creates_skipped_result():
 
     assert result["status"] == "skipped"
     assert result["error_message"] == "TRVL_ENABLED=false"
+
+
+# ── Risk filtering tests ──────────────────────────────────────────────
+
+
+def test_hidden_city_warning_is_filtered_by_default():
+    """hidden_city warning in stderr should filter the offer."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "TestAir"},
+        ],
+    }
+
+    # Ensure risky offers are blocked (default)
+    os.environ["TRVL_ALLOW_RISKY_FLIGHT_OFFERS"] = "false"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+            stderr="WARNING: hidden_city detected for PIT→ORD leg",
+        )
+
+        assert normalized["normalized_count"] == 0
+        assert normalized["skipped_count"] == 1
+        assert any(r["reason"] == "risky_offer" for r in normalized.get("skipped_reasons", []))
+    finally:
+        os.environ.pop("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", None)
+
+
+def test_self_connect_true_is_filtered_by_default():
+    """self_connect=true on raw offer should filter the offer."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "TestAir", "self_connect": True},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+    assert any(r["reason"] == "risky_offer" for r in normalized.get("skipped_reasons", []))
+
+
+def test_normal_nonstop_offer_is_kept():
+    """Normal nonstop flight should pass through filtering."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "Delta", "stops": 0},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 1
+    assert normalized["offers"][0]["provider"] == "Delta"
+    assert normalized["skipped_count"] == 0
+
+
+def test_normal_one_stop_offer_is_kept():
+    """Normal one-stop flight should pass through filtering."""
+    raw = {
+        "success": True,
+        "flights": [
+            {
+                "price": 250,
+                "currency": "USD",
+                "provider": "United",
+                "stops": 1,
+                "legs": [
+                    {"carrier": "UA", "departure": "PIT", "arrival": "ORD"},
+                    {"carrier": "UA", "departure": "ORD", "arrival": "MOT"},
+                ],
+            },
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 1
+    # Provider is the airline code from legs (UA), not display name
+    assert normalized["offers"][0]["provider"] == "UA"
+
+
+def test_risky_offers_allowed_when_flag_enabled():
+    """When TRVL_ALLOW_RISKY_FLIGHT_OFFERS=true, risky offers are kept."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "Skiplagged", "self_connect": True},
+        ],
+    }
+
+    os.environ["TRVL_ALLOW_RISKY_FLIGHT_OFFERS"] = "true"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+        )
+
+        assert normalized["normalized_count"] == 1
+        assert normalized["skipped_count"] == 0
+    finally:
+        os.environ.pop("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", None)
+
+
+# ── Currency filtering tests ──────────────────────────────────────────
+
+
+def test_currency_mismatch_filtered_when_required():
+    """Currency mismatch should be filtered when TRVL_REQUIRE_CONFIGURED_CURRENCY=true."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "EUR", "provider": "EuropeanAir"},
+            {"price": 180, "currency": "USD", "provider": "USAir"},
+        ],
+    }
+
+    os.environ["TRVL_REQUIRE_CONFIGURED_CURRENCY"] = "true"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+        )
+
+        assert normalized["normalized_count"] == 1
+        assert normalized["offers"][0]["currency"] == "USD"
+        assert normalized["skipped_count"] == 1
+        assert any(r["reason"] == "currency_mismatch" for r in normalized.get("skipped_reasons", []))
+    finally:
+        os.environ.pop("TRVL_REQUIRE_CONFIGURED_CURRENCY", None)
+
+
+def test_currency_mismatch_kept_when_not_required():
+    """Currency mismatch should be kept when TRVL_REQUIRE_CONFIGURED_CURRENCY=false."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "EUR", "provider": "EuropeanAir"},
+            {"price": 180, "currency": "USD", "provider": "USAir"},
+        ],
+    }
+
+    os.environ["TRVL_REQUIRE_CONFIGURED_CURRENCY"] = "false"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+        )
+
+        assert normalized["normalized_count"] == 2
+        currencies = {offer["currency"] for offer in normalized["offers"]}
+        assert currencies == {"EUR", "USD"}
+    finally:
+        os.environ.pop("TRVL_REQUIRE_CONFIGURED_CURRENCY", None)
+
+
+# ── Skipped reasons tests ─────────────────────────────────────────────
+
+
+def test_skipped_reasons_counted_in_normalized_result_json():
+    """Skipped offers should have their reasons recorded in skipped_reasons."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "EUR", "provider": "EuroAir"},
+            {"price": None, "currency": "USD", "provider": "NoPriceAir"},
+            {"price": 180, "currency": "USD", "provider": "Skiplagged", "self_connect": True},
+        ],
+    }
+
+    os.environ["TRVL_REQUIRE_CONFIGURED_CURRENCY"] = "true"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+        )
+
+        assert normalized["skipped_count"] == 3
+        reasons = [r["reason"] for r in normalized.get("skipped_reasons", [])]
+        assert "currency_mismatch" in reasons
+        assert "missing_data" in reasons
+        assert "risky_offer" in reasons
+    finally:
+        os.environ.pop("TRVL_REQUIRE_CONFIGURED_CURRENCY", None)
+
+
+# ── All-risky success=true tests ──────────────────────────────────────
+
+
+def test_all_risky_returned_success_true_produces_completed_result():
+    """When all offers are risky but trvl returns success=true, result should be completed with zero offers."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "Skiplagged", "self_connect": True},
+            {"price": 180, "currency": "USD", "provider": "HiddenCityAir"},
+        ],
+    }
+
+    os.environ["TRVL_ALLOW_RISKY_FLIGHT_OFFERS"] = "false"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+        )
+
+        assert normalized["normalized_count"] == 0
+        assert normalized["raw_count"] == 2
+        assert normalized["skipped_count"] == 2
+    finally:
+        os.environ.pop("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", None)
+
+
+def test_mixed_safe_risky_currency_input_keeps_only_safe_offers():
+    """Mixed input should keep only safe offers with configured currency."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 180, "currency": "USD", "provider": "SafeAir", "stops": 0},
+            {"price": 200, "currency": "EUR", "provider": "EuroAir"},
+            {"price": 150, "currency": "USD", "provider": "Skiplagged", "self_connect": True},
+        ],
+    }
+
+    os.environ["TRVL_REQUIRE_CONFIGURED_CURRENCY"] = "true"
+    try:
+        normalized = trvl_adapter.normalize_flights(
+            raw,
+            {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+            max_results=20,
+        )
+
+        assert normalized["normalized_count"] == 1
+        assert normalized["offers"][0]["provider"] == "SafeAir"
+        assert normalized["skipped_count"] == 2
+    finally:
+        os.environ.pop("TRVL_REQUIRE_CONFIGURED_CURRENCY", None)
+
+
+# ── Airport code cleanup tests ────────────────────────────────────────
+
+
+def test_airport_codes_with_embedded_quotes_are_cleaned():
+    """Airport codes with embedded quotes should be cleaned in normalized metadata."""
+    query_json = {
+        "origin_airport": "'PIT'",
+        "destination_airport": '"ORD"',
+        "currency": "USD",
+    }
+
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "Delta"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        query_json,
+        max_results=20,
+    )
+
+    assert normalized["offers"][0]["origin"] == "PIT"
+    assert normalized["offers"][0]["destination"] == "ORD"
+
+
+def test_clean_airport_code_helper():
+    """Test _clean_airport_code helper with various inputs."""
+    assert trvl_adapter._clean_airport_code("'PIT'") == "PIT"
+    assert trvl_adapter._clean_airport_code('"ORD"') == "ORD"
+    assert trvl_adapter._clean_airport_code("PIT") == "PIT"
+    assert trvl_adapter._clean_airport_code(None) is None
+    assert trvl_adapter._clean_airport_code("''") is None
+
+
+def test_hotel_normalization_not_broken_by_flight_risk_filtering():
+    """Hotel normalization should work independently of flight risk filtering."""
+    raw = {
+        "success": True,
+        "hotels": [
+            {"name": "Hotel A", "price": 150, "currency": "USD"},
+            {"name": "Hotel B", "price": 200, "currency": "EUR"},
+        ],
+    }
+
+    os.environ["TRVL_REQUIRE_CONFIGURED_CURRENCY"] = "true"
+    try:
+        normalized = trvl_adapter.normalize_hotels(
+            raw,
+            {"destination_value": "Chicago", "checkin": "2026-09-18", "checkout": "2026-09-21", "currency": "USD"},
+            max_results=20,
+        )
+
+        # Hotel normalization should NOT apply flight risk/currency filtering
+        assert normalized["normalized_count"] == 2
+    finally:
+        os.environ.pop("TRVL_REQUIRE_CONFIGURED_CURRENCY", None)
+
+
+def test_cheapest_source_skiplagged_is_filtered():
+    """cheapest_source=Skiplagged should be filtered as risky."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 150, "currency": "USD", "provider": "Delta", "legs": [{"airline": "DL"}]},
+            {"price": 120, "currency": "USD", "provider": "", "cheapest_source": "Skiplagged"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 1
+    # Provider is airline code from legs (DL), not display name
+    assert normalized["offers"][0]["provider"] == "DL"
+    assert normalized["skipped_count"] == 1
+
+
+def test_nested_self_connect_legs_are_filtered():
+    """Self-connecting legs with different carriers should be filtered."""
+    raw = {
+        "success": True,
+        "flights": [
+            {
+                "price": 200,
+                "currency": "USD",
+                "provider": "MetaSearch",
+                "legs": [
+                    {"carrier": "UA", "departure": "PIT", "arrival": "ORD"},
+                    {"carrier": "AA", "departure": "ORD", "arrival": "MOT"},
+                ],
+            },
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_same_carrier_one_stop_is_not_filtered():
+    """One-stop with same carrier should NOT be filtered as self-connect."""
+    raw = {
+        "success": True,
+        "flights": [
+            {
+                "price": 250,
+                "currency": "USD",
+                "provider": "United",
+                "stops": 1,
+                "legs": [
+                    {"carrier": "UA", "departure": "PIT", "arrival": "ORD"},
+                    {"carrier": "UA", "departure": "ORD", "arrival": "MOT"},
+                ],
+            },
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 1
+    # Provider is the airline code from legs (UA), not display name
+    assert normalized["offers"][0]["provider"] == "UA"
+
+
+def test_separate_tickets_warning_is_filtered():
+    """separate_tickets warning should filter the offer."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "MetaAir"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+        stderr="WARNING: separate_tickets required for this itinerary",
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_throwaway_warning_is_filtered():
+    """throwaway warning should filter the offer."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "MetaAir"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+        stderr="WARNING: throwaway ticket pattern detected",
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_skiplagged_hack_warning_is_filtered():
+    """skiplagged_hack warning should filter the offer."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "MetaAir"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+        stderr="WARNING: skiplagged_hack pattern detected for this route",
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_nested_warning_is_filtered():
+    """nested warning should filter the offer."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "MetaAir"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+        stderr="WARNING: nested itinerary detected",
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_warnings_field_on_flight_object_is_checked():
+    """warnings field on the flight object itself should be checked for risky terms."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "MetaAir", "warnings": "hidden_city"},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_warnings_list_on_flight_object_is_checked():
+    """warnings list on the flight object should be checked for risky terms."""
+    raw = {
+        "success": True,
+        "flights": [
+            {"price": 200, "currency": "USD", "provider": "MetaAir", "warnings": ["safe_warning", "hidden_city"]},
+        ],
+    }
+
+    normalized = trvl_adapter.normalize_flights(
+        raw,
+        {"origin_airport": "PIT", "destination_airport": "MOT", "currency": "USD"},
+        max_results=20,
+    )
+
+    assert normalized["normalized_count"] == 0
+    assert normalized["skipped_count"] == 1
+
+
+def test_clean_airport_code_helper():
+    """Test _clean_airport_code helper with various inputs."""
+    assert trvl_adapter._clean_airport_code("'PIT'") == "PIT"
+    assert trvl_adapter._clean_airport_code('"ORD"') == "ORD"
+    assert trvl_adapter._clean_airport_code("PIT") == "PIT"
+    assert trvl_adapter._clean_airport_code(None) is None
+    assert trvl_adapter._clean_airport_code("''") is None

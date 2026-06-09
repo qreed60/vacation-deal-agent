@@ -380,10 +380,117 @@ def build_hotel_query(query: dict[str, Any], *, currency: str) -> dict[str, Any]
     }
 
 
+def _is_risky_offer(flight: dict[str, Any], stderr_warnings: list[str]) -> bool:
+    """Check if a flight offer exhibits risky/hack-style behavior.
+
+    Returns True when the offer appears to be hidden-city, throwaway,
+    skiplagged-hack, nested, self-connecting, or separate-tickets style.
+    """
+    # Check stderr warnings for risky terms
+    risky_terms = (
+        "hidden_city",
+        "throwaway",
+        "skiplagged_hack",
+        "nested",
+        "self_connect",
+        "separate_tickets",
+    )
+    for warning in stderr_warnings:
+        lower_warning = warning.lower()
+        if any(term in lower_warning for term in risky_terms):
+            return True
+
+    # Check raw offer fields
+    if flight.get("self_connect") is True:
+        return True
+
+    # Check provider/cheapest_source for hidden-city indicators
+    trvl_provider = _first_string(flight, ("provider", "source_provider", "source")) or ""
+    cheapest_source = _first_string(flight, ("cheapest_source", "cheapestSource")) or ""
+    combined = (trvl_provider + " " + cheapest_source).lower()
+
+    hidden_city_indicators = (
+        "hidden_city",
+        "hidden city",
+        "hiddencity",
+        "throwaway",
+        "skiplagged_hack",
+        "skiplagged hack",
+        "skiplaggedhack",
+        "skiplagged",
+        "hack",
+    )
+    if any(indicator in combined for indicator in hidden_city_indicators):
+        return True
+
+    # Check warnings field on the flight object itself
+    warnings = flight.get("warnings") or flight.get("warning")
+    if isinstance(warnings, str):
+        warnings_list = [w.strip() for w in warnings.split(",") if w.strip()]
+    elif isinstance(warnings, list):
+        warnings_list = [str(w).strip() for w in warnings if w]
+    else:
+        warnings_list = []
+
+    for warning in warnings_list:
+        lower_warning = warning.lower()
+        if any(term in lower_warning for term in risky_terms + ("hidden_city", "throwaway", "skiplagged_hack")):
+            return True
+
+    # Check nested legs/segments for self-connect patterns
+    for leg_key in ("legs", "segments"):
+        legs = flight.get(leg_key)
+        if isinstance(legs, list):
+            for i, leg in enumerate(legs[:-1]):
+                if not isinstance(leg, dict):
+                    continue
+                next_leg = legs[i + 1] if i + 1 < len(legs) else None
+                if not isinstance(next_leg, dict):
+                    continue
+                # Self-connect: arrival airport of leg == departure airport of next leg
+                # but they're on different tickets (different carriers or explicit flag)
+                arr_airport = _first_string(leg, ("arrival", "arrival_airport", "arrivalAirport"))
+                dep_airport = _first_string(next_leg, ("departure", "departure_airport", "departureAirport"))
+                if arr_airport and dep_airport:
+                    # If the same airport appears as both arrival and departure
+                    # but carriers differ, it's a self-connect pattern
+                    carrier1 = _first_string(leg, ("carrier", "carrier_code", "carrierCode", "airline_code"))
+                    carrier2 = _first_string(next_leg, ("carrier", "carrier_code", "carrierCode", "airline_code"))
+                    if carrier1 and carrier2 and str(carrier1).upper() != str(carrier2).upper():
+                        return True
+
+    return False
+
+
+def _clean_airport_code(value: str | None) -> str | None:
+    """Clean airport code strings by removing embedded quotes.
+
+    For example, "'PIT'" becomes "PIT", and '"ORD"' becomes "ORD".
+    """
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    # Remove surrounding single or double quotes that may be part of the string content
+    while len(cleaned) >= 2 and ((cleaned[0] == "'" and cleaned[-1] == "'") or (cleaned[0] == '"' and cleaned[-1] == '"')):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned if cleaned else None
+
+
 def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int, stderr: str = "", command_metadata: dict[str, Any] | None = None, traveler_pricing_note: str | None = None) -> dict[str, Any]:
     flights = _candidate_items(raw, ("flights", "offers", "results", "itineraries"))
     offers: list[dict[str, Any]] = []
     skipped_count = 0
+    skipped_reasons: list[dict[str, str]] = []
+
+    # Read risk/currency config from environment
+    allow_risky = os.environ.get("TRVL_ALLOW_RISKY_FLIGHT_OFFERS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    require_currency = os.environ.get("TRVL_REQUIRE_CONFIGURED_CURRENCY", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    # Get the configured currency from query_json (set by build_flight_query)
+    configured_currency = query_json.get("currency") or DEFAULT_CURRENCY
+
+    stderr_warnings = _stderr_warnings(stderr)
+
     for flight in flights:
         price, currency = _price_and_currency(
             flight,
@@ -392,7 +499,40 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
         provider, trvl_provider, cheapest_source = _flight_provider(flight)
         if price is None or not currency or not provider:
             skipped_count += 1
+            skipped_reasons.append({"reason": "missing_data", "provider": str(provider or "")})
             continue
+
+        # Risk filtering
+        if not allow_risky and _is_risky_offer(flight, stderr_warnings):
+            skipped_count += 1
+            reason_parts = []
+            if flight.get("self_connect") is True:
+                reason_parts.append("self_connect")
+            warnings = flight.get("warnings") or flight.get("warning")
+            if isinstance(warnings, str):
+                for w in [x.strip() for x in warnings.split(",") if x.strip()]:
+                    if any(t in w.lower() for t in ("hidden_city", "throwaway", "skiplagged_hack")):
+                        reason_parts.append(w)
+            elif isinstance(warnings, list):
+                for w in [str(x).strip() for x in warnings if x]:
+                    if any(t in w.lower() for t in ("hidden_city", "throwaway", "skiplagged_hack")):
+                        reason_parts.append(w)
+            cheapest = cheapest_source or trvl_provider or provider
+            if any(ind in cheapest.lower() for ind in ("hidden_city", "throwaway", "skiplagged", "hack")):
+                reason_parts.append(f"provider={cheapest}")
+            skipped_reasons.append({"reason": "risky_offer", "details": "; ".join(reason_parts) or "risky_pattern"})
+            continue
+
+        # Currency filtering
+        if require_currency and configured_currency and currency.upper() != configured_currency.upper():
+            skipped_count += 1
+            skipped_reasons.append({
+                "reason": "currency_mismatch",
+                "offer_currency": currency,
+                "configured_currency": configured_currency,
+            })
+            continue
+
         departure, arrival = _flight_times(flight)
         source_url = _source_url(flight)
         flight_signature = _flight_number_signature(flight)
@@ -406,6 +546,11 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
             ]
             if part
         )
+
+        # Clean airport code metadata (remove embedded quotes)
+        origin = _clean_airport_code(query_json.get("origin_airport")) or _clean_airport_code(query_json.get("origin_value"))
+        destination = _clean_airport_code(query_json.get("destination_airport")) or _clean_airport_code(query_json.get("destination_value"))
+
         offer = {
             "component_type": "flight",
             "component_type_label": "Airfare",
@@ -416,8 +561,8 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
             "label": label,
             "total_price": price,
             "currency": currency,
-            "origin": query_json.get("origin_airport") or query_json.get("origin_value"),
-            "destination": query_json.get("destination_airport") or query_json.get("destination_value"),
+            "origin": origin,
+            "destination": destination,
             "departure": departure,
             "arrival": arrival,
             "departure_date": query_json.get("departure_date"),
@@ -437,6 +582,7 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
         if traveler_pricing_note:
             offer["traveler_pricing_note"] = traveler_pricing_note
         offers.append(offer)
+
     bounded = _sort_dedupe_limit(offers, max_results=max_results)
     return {
         "source_name": SOURCE_NAME,
@@ -445,8 +591,9 @@ def normalize_flights(raw: Any, query_json: dict[str, Any], *, max_results: int,
         "raw_count": len(flights),
         "normalized_count": len(bounded),
         "skipped_count": skipped_count + max(0, len(offers) - len(bounded)),
+        "skipped_reasons": skipped_reasons,
         "provider_statuses": raw.get("provider_statuses") if isinstance(raw, dict) else None,
-        "stderr_warnings": _stderr_warnings(stderr),
+        "stderr_warnings": stderr_warnings,
         "command": _bounded_public_data(command_metadata or {}, max_depth=3, max_items=20),
         "query": query_json,
     }
