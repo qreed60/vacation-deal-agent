@@ -368,10 +368,15 @@ def price_snapshots_for_run(session: Session, search_run_id: int) -> list[PriceS
     return list(session.exec(statement).all())
 
 
-def deal_candidates_for_vacation(session: Session, vacation_id: int) -> list[DealCandidate]:
+def deal_candidates_for_vacation(
+    session: Session,
+    vacation_id: int,
+    include_mock: bool = False,
+) -> list[DealCandidate]:
     statement = (
         select(DealCandidate)
         .where(DealCandidate.vacation_id == vacation_id)
+        .where(DealCandidate.is_mock == False if not include_mock else DealCandidate.is_mock.isnot(None))
         .order_by(DealCandidate.id.asc())
     )
     candidates = list(session.exec(statement).all())
@@ -387,15 +392,21 @@ def deal_candidates_for_vacation(session: Session, vacation_id: int) -> list[Dea
     )
 
 
-def best_deal_for_vacation(session: Session, vacation_id: int) -> DealCandidate | None:
-    candidates = session.exec(
+def best_deal_for_vacation(
+    session: Session,
+    vacation_id: int,
+    include_mock: bool = False,
+) -> DealCandidate | None:
+    statement = (
         select(DealCandidate)
         .where(DealCandidate.vacation_id == vacation_id)
         .where(DealCandidate.status == "valid")
         .where(DealCandidate.score.is_not(None))
+        .where(DealCandidate.is_mock == False if not include_mock else DealCandidate.is_mock.isnot(None))
         .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.desc())
         .limit(1)
-    ).all()
+    )
+    candidates = list(session.exec(statement).all())
     return candidates[0] if candidates else None
 
 
