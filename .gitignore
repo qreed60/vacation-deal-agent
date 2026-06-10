@@ -1,14 +1,29 @@
-.venv/
-__pycache__/
+```
+# Compiled Python files
 *.pyc
+__pycache__/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage/
+
+# Pytest cache
 .pytest_cache/
-.env
-data/*.sqlite3
-data/*.sqlite3-*
-data/snapshots/
-data/imports/*
-data/exports/*
-!.gitkeep
-.dyad/
-data/free_source_probes/*.json
-.tools/
+
+# MyPy cache
+.mypy_cache/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+```
