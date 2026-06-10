@@ -84,6 +84,7 @@ class PriceSnapshot(SQLModel, table=True):
     normalized_json: str = Field(default="{}")
     captured_at: datetime = Field(default_factory=utc_now)
     created_at: datetime = Field(default_factory=utc_now)
+    is_mock: bool = Field(default=False, index=True)
 
 
 class DealCandidate(SQLModel, table=True):
@@ -103,3 +104,4 @@ class DealCandidate(SQLModel, table=True):
     source_links_json: str = Field(default="[]")
     normalized_result_json: str = Field(default="{}")
     created_at: datetime = Field(default_factory=utc_now)
+    is_mock: bool = Field(default=False, index=True)

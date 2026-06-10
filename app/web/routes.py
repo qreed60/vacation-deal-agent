@@ -15,12 +15,20 @@ from app.services.manifest_io import (
     update_vacation_from_manifest,
     vacation_from_manifest,
 )
-from app.services.price_history import svg_line_points, vacation_price_history
+from app.services.price_history import (
+    aggregate_daily_ohlc,
+    get_source_link_label,
+    is_google_flights_url,
+    svg_line_points,
+    svg_ohlc_candles,
+    vacation_price_history,
+)
 from app.services.search_runner import best_deal_for_vacation, deal_candidates_for_vacation, run_search_once, source_results_for_run
 
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/web/templates")
+templates.env.globals["get_source_link_label"] = get_source_link_label
 
 
 SOURCE_NAME_LABELS = {
@@ -484,19 +492,48 @@ def deal_detail(deal_candidate_id: int, request: Request, session: Session = Dep
 
 
 @router.get("/vacations/{vacation_id}/price-history", response_class=HTMLResponse)
-def price_history_page(vacation_id: int, request: Request, session: Session = Depends(get_session)):
+def price_history_page(
+    vacation_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    include_mock: int = 0,
+    component: str | None = None,
+):
     vacation = session.get(Vacation, vacation_id)
     if vacation is None:
         return HTMLResponse("Vacation not found", status_code=404)
-    history = vacation_price_history(session, vacation_id)
-    rows = history["deals"] or history["snapshots"]
+    
+    # Parse query params
+    show_mock = bool(include_mock)
+    comp_filter = component if component and component != "all" else None
+    
+    history = vacation_price_history(session, vacation_id, include_mock=show_mock, component_type=comp_filter)
+    
+    # Use OHLC data for the chart
+    ohlc_data = history["ohlc"]
+    history_points = svg_ohlc_candles(ohlc_data) if ohlc_data else ""
+    
+    # Get component counts for tabs
+    all_snapshots = vacation_price_history(session, vacation_id, include_mock=True)["snapshots"]
+    component_counts = {"flight": 0, "hotel": 0, "rental_car": 0, "package": 0}
+    for snap in all_snapshots:
+        qt = snap.get("quote_type", "")
+        if qt in component_counts:
+            component_counts[qt] += 1
+    
     return templates.TemplateResponse(
         request,
         "price_history.html",
         {
             "vacation": vacation,
             "history": history,
-            "history_points": svg_line_points(rows),
+            "history_points": history_points,
+            "include_mock": show_mock,
+            "component_filter": comp_filter or "all",
+            "component_counts": component_counts,
+            "vacation_airfare_needed": vacation.airfare_needed,
+            "vacation_hotel_needed": vacation.hotel_needed,
+            "vacation_rental_car_needed": vacation.rental_car_needed,
         },
     )
 

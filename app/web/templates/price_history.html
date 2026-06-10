@@ -8,14 +8,45 @@
       <a href="/vacations/{{ vacation.id }}" class="btn btn-secondary">Back to vacation</a>
     </div>
 
+    <!-- Component filter tabs -->
+    <div style="margin:1rem 0; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
+      <span style="font-size:0.875rem; color:var(--text-muted); margin-right:0.5rem;">Filter by component:</span>
+      <a href="?component=all&include_mock={{ '1' if include_mock else '0' }}" 
+         class="btn btn-sm {% if component_filter == 'all' %}btn-primary{% else %}btn-secondary{% endif %}"
+         style="padding:0.35rem 0.65rem; font-size:0.8125rem;">All</a>
+      <a href="?component=flight&include_mock={{ '1' if include_mock else '0' }}" 
+         class="btn btn-sm {% if component_filter == 'flight' %}btn-primary{% else %}btn-secondary{% endif %}"
+         style="padding:0.35rem 0.65rem; font-size:0.8125rem;">Airfare ({{ component_counts.flight }})</a>
+      <a href="?component=hotel&include_mock={{ '1' if include_mock else '0' }}" 
+         class="btn btn-sm {% if component_filter == 'hotel' %}btn-primary{% else %}btn-secondary{% endif %}"
+         style="padding:0.35rem 0.65rem; font-size:0.8125rem;">Hotel ({{ component_counts.hotel }})</a>
+      <a href="?component=rental_car&include_mock={{ '1' if include_mock else '0' }}" 
+         class="btn btn-sm {% if component_filter == 'rental_car' %}btn-primary{% else %}btn-secondary{% endif %}"
+         style="padding:0.35rem 0.65rem; font-size:0.8125rem;">Rental ({{ component_counts.rental_car }})</a>
+      <a href="?component=package&include_mock={{ '1' if include_mock else '0' }}" 
+         class="btn btn-sm {% if component_filter == 'package' %}btn-primary{% else %}btn-secondary{% endif %}"
+         style="padding:0.35rem 0.65rem; font-size:0.8125rem;">Package ({{ component_counts.package }})</a>
+      
+      <span style="margin-left:1rem; font-size:0.875rem; color:var(--text-muted);">|</span>
+      
+      {% if include_mock %}
+        <a href="?component={{ component_filter }}&include_mock=0" 
+           class="btn btn-sm btn-secondary"
+           style="padding:0.35rem 0.65rem; font-size:0.8125rem;">Hide mock data</a>
+      {% else %}
+        <a href="?component={{ component_filter }}&include_mock=1" 
+           class="btn btn-sm btn-secondary"
+           style="padding:0.35rem 0.65rem; font-size:0.8125rem;">Show mock data</a>
+      {% endif %}
+    </div>
+
     {% if history_points %}
-      <svg class="price-chart" viewBox="0 0 640 180" role="img" aria-label="Price history graph">
-        <line x1="24" y1="156" x2="624" y2="156" class="chart-axis"></line>
-        <polyline points="{{ history_points }}" class="chart-line"></polyline>
+      <svg class="price-chart" viewBox="0 0 640 180" role="img" aria-label="Price history OHLC chart">
+        {{ history_points | safe }}
       </svg>
     {% else %}
       <div class="runs-empty-state" style="padding:1rem; margin-bottom:1.25rem;">
-        <p>No priced history yet.</p>
+        <p>No priced history for the selected filters.</p>
       </div>
     {% endif %}
 
@@ -29,16 +60,21 @@
             <th>Label</th>
             <th>Total</th>
             <th>Source</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {% for row in history.deals %}
-            <tr>
+            <tr{% if row.is_mock %} style="background:#fffbeb;"{% endif %}>
               <td data-label="Timestamp">{{ row.timestamp }}</td>
               <td data-label="Type">{{ row.quote_type }}</td>
-              <td data-label="Label">{{ row.label }}</td>
+              <td data-label="Label">
+                {{ row.label }}
+                {% if row.is_mock %}<span class="badge badge-mock">MOCK</span>{% endif %}
+              </td>
               <td data-label="Total">{{ row.currency }} {{ '%.2f'|format(row.total_price) }}</td>
               <td data-label="Source">{{ row.source_name }}</td>
+              <td data-label=""></td>
             </tr>
           {% endfor %}
         </tbody>
@@ -57,16 +93,28 @@
             <th>Label</th>
             <th>Total</th>
             <th>Source</th>
+            <th>Link</th>
           </tr>
         </thead>
         <tbody>
           {% for row in history.snapshots %}
-            <tr>
+            {% set link_type, link_label = get_source_link_label(row.get('source_url'), row.get('source_name')) %}
+            <tr{% if row.is_mock %} style="background:#fffbeb;"{% endif %}>
               <td data-label="Timestamp">{{ row.timestamp }}</td>
               <td data-label="Type">{{ row.quote_type }}</td>
-              <td data-label="Label">{{ row.label }}</td>
+              <td data-label="Label">
+                {{ row.label }}
+                {% if row.is_mock %}<span class="badge badge-mock">MOCK</span>{% endif %}
+              </td>
               <td data-label="Total">{{ row.currency }} {{ '%.2f'|format(row.total_price) }}</td>
               <td data-label="Source">{{ row.source_name }}</td>
+              <td data-label="Link">
+                {% if link_label and row.source_url %}
+                  <a href="{{ row.source_url }}" target="_blank" rel="noopener">{{ link_label }}</a>
+                {% else %}
+                  -
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>

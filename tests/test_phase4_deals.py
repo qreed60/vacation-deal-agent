@@ -8,6 +8,11 @@ from app.db.session import get_engine, init_db
 from app.services.deal_scoring import score_candidate
 from app.services.manifest_io import vacation_from_manifest
 from app.services.package_builder import build_deal_candidates
+from app.services.price_history import (
+    aggregate_daily_ohlc,
+    get_source_link_label,
+    is_google_flights_url,
+)
 from app.services.quote_normalizer import snapshots_from_source_result
 from app.services.search_planner import deterministic_json
 from app.services.search_runner import run_search_once
