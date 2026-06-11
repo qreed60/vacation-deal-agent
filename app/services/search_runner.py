@@ -533,10 +533,14 @@ def _run_with_session(
         )
         has_research_fallback = SOURCE_STATUS_RESEARCH_FALLBACK_ONLY in source_statuses.values()
 
-        # Only infer estimated_priced_deal when we actually have deal candidates.
+        # Only infer estimated_priced_deal when we actually have deal candidates
+        # that contain priced data (not partial/skipped candidates with no price).
         # SOURCE_STATUS_SUCCESS_NO_DEALS means a source returned successfully but found nothing —
         # it does NOT mean there are estimated priced candidates available.
-        has_estimated = len(deal_candidates) > 0 and not has_exact_priced
+        has_any_priced_candidate = any(
+            c.total_price is not None for c in deal_candidates
+        ) if deal_candidates else False
+        has_estimated = has_any_priced_candidate and not has_exact_priced
 
         # Build latest_error_summary from failure data when no deals were found
         error_categories = failure_summary.get("source_failure_categories", {})
