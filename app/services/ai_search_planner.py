@@ -119,6 +119,11 @@ def build_deterministic_baseline_plan(vacation: Any) -> dict[str, Any]:
     elif not destination_raw or re.fullmatch(r"[A-Z]{3}", destination_raw):
         destination_airport = destination_airport or (destination_raw.upper() if destination_raw else None)
 
+    # If destination_raw is a non-empty city name that didn't resolve to an IATA code,
+    # still use it so the baseline plan generates searches (the old system did this too).
+    if not destination_airport and destination_raw:
+        destination_airport = destination_raw.upper()
+
     date_mode = manifest.get("date_mode", "fixed")
     travelers = manifest.get("travelers") or []
     traveler_count = int(manifest.get("number_of_travelers") or len(travelers) or 1)
@@ -518,14 +523,68 @@ def build_search_plan_with_config(vacation: Any, config: SourceConfig | None = N
     return final_plan
 
 
+def _build_legacy_queries_from_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """Reproduce the old search_planner.build_search_plan query generation.
+
+    The legacy planner generates one query per requested service (flight/hotel/rental_car)
+    with a 'mock' flag and full base_context. This is needed for backwards compatibility
+    when callers use build_ai_search_plan but expect the same query count as before.
+    """
+    queries: list[dict[str, Any]] = []
+    base_context = {
+        "origin": manifest.get("origin", ""),
+        "destination": manifest.get("destination", ""),
+        "date_mode": manifest.get("date_mode", "fixed"),
+        "start_date": manifest.get("start_date"),
+        "end_date": manifest.get("end_date"),
+        "nights_min": manifest.get("nights_min"),
+        "nights_target": manifest.get("nights_target"),
+        "nights_max": manifest.get("nights_max"),
+        "number_of_travelers": manifest.get("number_of_travelers", 1),
+        "travelers": manifest.get("travelers") or [],
+        "special_accommodations": manifest.get("special_accommodations", ""),
+    }
+
+    if manifest.get("airfare_needed"):
+        queries.append({
+            "source_name": "mock_travel",
+            "result_type": "flight",
+            "query": {**base_context, "service": "flight", "mock": True},
+        })
+    if manifest.get("hotel_needed"):
+        queries.append({
+            "source_name": "mock_travel",
+            "result_type": "hotel",
+            "query": {**base_context, "service": "hotel", "mock": True},
+        })
+    if manifest.get("rental_car_needed"):
+        queries.append({
+            "source_name": "mock_travel",
+            "result_type": "rental_car",
+            "query": {**base_context, "service": "rental_car", "mock": True},
+        })
+
+    return queries
+
+
 def build_ai_search_plan(vacation: Any) -> dict[str, Any]:
     """Build a search plan using AI if enabled/configured, else deterministic baseline.
 
     Convenience wrapper that loads SourceConfig internally.
+
+    Also adds legacy-compatible 'queries' key so existing callers get the same
+    query count as before (one per requested service with mock=True).
     """
     from app.services.source_config import load_source_config
     config = load_source_config()
-    return build_search_plan_with_config(vacation, config)
+    plan = build_search_plan_with_config(vacation, config)
+
+    # Add legacy-compatible queries for backwards compatibility
+    if "queries" not in plan:
+        manifest = manifest_for_vacation(vacation)
+        plan["queries"] = _build_legacy_queries_from_manifest(manifest)
+
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -670,5 +729,95 @@ def build_search_plan(vacation: Any) -> dict[str, Any]:
 
     This is the existing public API; it loads SourceConfig internally for
     backwards compatibility with callers that don't pass config.
+
+    Returns a plan with both 'searches' (Phase 5A) and 'queries' (legacy) keys
+    so callers can use either format without breaking.
     """
-    return build_ai_search_plan(vacation)
+    plan = build_ai_search_plan(vacation)
+    # Add backwards-compatible 'queries' key for existing callers
+    if "queries" not in plan:
+        plan["queries"] = _plan_to_queries(plan)
+    return plan
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible query bridge: convert plan searches to legacy query entries
+# ---------------------------------------------------------------------------
+
+def _plan_to_queries(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert a Phase 5A plan (with 'searches') into legacy query entries.
+
+    The search_runner iterates over plan['queries'] where each entry has
+    source_name, result_type, and query. This bridges the new baseline/AI
+    plan format to that expected interface.
+    """
+    queries: list[dict[str, Any]] = []
+    searches = plan.get("searches") or []
+    fallback_searches = plan.get("fallback_searches") or []
+
+    for search in (searches + fallback_searches):
+        search_type = search.get("search_type", "")
+        origin = search.get("origin_airport", "")
+        destination = search.get("destination_airport", "")
+        departure = search.get("departure_date", "")
+        return_d = search.get("return_date", "")
+
+        if search_type == "flight":
+            queries.append({
+                "source_name": "mock_travel",
+                "result_type": "flight",
+                "query": {
+                    "service": "flight",
+                    "origin": origin,
+                    "destination": destination,
+                    "start_date": departure,
+                    "end_date": return_d,
+                    "date_mode": "fixed",
+                    "nights_min": 0,
+                    "nights_target": 0,
+                    "nights_max": 0,
+                    "number_of_travelers": 1,
+                    "travelers": [],
+                    "special_accommodations": "",
+                },
+            })
+        elif search_type == "hotel":
+            queries.append({
+                "source_name": "mock_travel",
+                "result_type": "hotel",
+                "query": {
+                    "service": "hotel",
+                    "origin": origin,
+                    "destination": destination,
+                    "start_date": departure,
+                    "end_date": return_d,
+                    "date_mode": "fixed",
+                    "nights_min": 0,
+                    "nights_target": 0,
+                    "nights_max": 0,
+                    "number_of_travelers": 1,
+                    "travelers": [],
+                    "special_accommodations": "",
+                },
+            })
+        elif search_type == "rental_car":
+            queries.append({
+                "source_name": "mock_travel",
+                "result_type": "rental_car",
+                "query": {
+                    "service": "rental_car",
+                    "origin": origin,
+                    "destination": destination,
+                    "start_date": departure,
+                    "end_date": return_d,
+                    "date_mode": "fixed",
+                    "nights_min": 0,
+                    "nights_target": 0,
+                    "nights_max": 0,
+                    "number_of_travelers": 1,
+                    "travelers": [],
+                    "special_accommodations": "",
+                },
+            })
+
+    return queries

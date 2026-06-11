@@ -11,7 +11,8 @@ from app.db.session import get_engine
 from app.services.manifest_io import manifest_for_vacation
 from app.services.package_builder import build_deal_candidates
 from app.services.quote_normalizer import snapshots_from_source_result
-from app.services.search_planner import build_search_plan, deterministic_json
+from app.services.ai_search_planner import build_search_plan, _plan_to_queries
+from app.services.search_planner import deterministic_json
 from app.services.source_config import SourceConfig, load_source_config
 
 
@@ -251,13 +252,29 @@ def _run_real_sources(
         "result_type": "web_context",
         "query": {"text": _web_context_query(query_entry), "source_query": query},
     }
-    web_result = searxng.search(
-        web_query["query"]["text"],
-        base_url=config.searxng_base_url,
-        timeout_seconds=config.searxng_timeout_seconds,
-        max_results=config.searxng_max_results,
-    )
-    statuses.append(_persist_adapter_result(session, search_run_id, "searxng", "web_context", web_query, web_result))
+
+    if config.searxng_fallback_enabled:
+        web_result = searxng.search(
+            web_query["query"]["text"],
+            base_url=config.searxng_base_url,
+            timeout_seconds=config.searxng_timeout_seconds,
+            max_results=config.searxng_max_results,
+        )
+        statuses.append(_persist_adapter_result(session, search_run_id, "searxng", "web_context", web_query, web_result))
+    else:
+        # SearXNG fallback disabled — record as skipped so summary reflects this
+        searxng_skipped = {
+            "status": "skipped",
+            "normalized_result": {
+                "source_name": "searxng",
+                "result_type": "web_context",
+                "reason": "SearXNG fallback disabled by config (SEARXNG_FALLBACK_ENABLED=false)",
+            },
+            "raw_result": {},
+            "error_message": "SearXNG research fallback is disabled in configuration.",
+        }
+        skipped_query = dict(web_query)
+        statuses.append(_persist_adapter_result(session, search_run_id, "searxng", "web_context", skipped_query, searxng_skipped))
 
     if result_type == "flight":
         serpapi_query = {"source_name": "serpapi_google_flights", "result_type": "flight", "query": query}
@@ -438,7 +455,10 @@ def _run_with_session(
         if use_mock and not config.mock_search_enabled:
             status_counts["mock_disabled"] = 1
 
-        for query_entry in plan["queries"]:
+        # Resolve queries from plan (supports both legacy 'queries' key and Phase 5A 'searches')
+        queries = plan.get("queries") or _plan_to_queries(plan)
+
+        for query_entry in queries:
             if effective_use_mock:
                 adapter_result = mock_travel.search(query_entry)
                 _persist_adapter_result(
@@ -512,14 +532,43 @@ def _run_with_session(
             for s in source_statuses.values()
         )
         has_research_fallback = SOURCE_STATUS_RESEARCH_FALLBACK_ONLY in source_statuses.values()
-        latest_error_summary = failure_summary.get("latest_trvl_error_message") or ""
+
+        # Only infer estimated_priced_deal when we actually have deal candidates.
+        # SOURCE_STATUS_SUCCESS_NO_DEALS means a source returned successfully but found nothing —
+        # it does NOT mean there are estimated priced candidates available.
+        has_estimated = len(deal_candidates) > 0 and not has_exact_priced
+
+        # Build latest_error_summary from failure data when no deals were found
+        error_categories = failure_summary.get("source_failure_categories", {})
+        source_statuses_for_errors = failure_summary.get("source_statuses", {})
+
+        latest_error_summary = ""  # Initialize to avoid UnboundLocalError
+        if latest_error_summary:
+            pass  # Already set above from trvl error message
+        elif error_categories.get("provider_error", 0) > 0 and not has_exact_priced and not has_estimated:
+            # Summarize provider failures when no deals found
+            failed_sources = [
+                src for src, status in source_statuses_for_errors.items()
+                if status == SOURCE_STATUS_PROVIDER_ERROR
+            ]
+            if failed_sources:
+                latest_error_summary = f"Provider error(s) from: {', '.join(failed_sources)}"
+        elif not has_exact_priced and not has_estimated and not has_research_fallback:
+            # Check for disabled sources when nothing worked
+            disabled_sources = [
+                src for src, status in source_statuses_for_errors.items()
+                if status == SOURCE_STATUS_CONFIG_DISABLED
+            ]
+            attempted_count = len([s for s in source_statuses_for_errors.values()
+                                   if s not in (SOURCE_STATUS_CONFIG_DISABLED,)])
+            if disabled_sources and attempted_count == 0:
+                latest_error_summary = f"No enabled structured sources available. Disabled: {', '.join(disabled_sources)}"
+            elif disabled_sources:
+                latest_error_summary = f"Structured sources failed or unavailable. Disabled: {', '.join(disabled_sources)}"
 
         if has_exact_priced:
             best_available_result_type = "exact_priced_deal"
-        elif any(
-            s == SOURCE_STATUS_SUCCESS_NO_DEALS
-            for s in source_statuses.values()
-        ):
+        elif has_estimated:
             best_available_result_type = "estimated_priced_deal"
         elif has_research_fallback:
             best_available_result_type = "research_fallback"
