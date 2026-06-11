@@ -37,6 +37,7 @@ def init_db() -> None:
     _ensure_vacation_columns()
     _ensure_deal_candidate_columns()
     _ensure_price_snapshot_columns()
+    _ensure_schedule_columns()
     _backfill_mock_flags()
 
 
@@ -133,6 +134,54 @@ def _ensure_price_snapshot_columns() -> None:
                 )
             )
             conn.commit()
+
+
+def _ensure_schedule_columns() -> None:
+    """Add Phase 5B schedule columns to existing SQLite databases.
+
+    Idempotent: only adds columns that are absent. Safe to call repeatedly.
+    Existing vacation rows default to schedule_enabled=0 (disabled).
+    """
+    engine = get_engine()
+    url = database_url()
+    if not url.startswith("sqlite"):
+        return
+
+    with engine.connect() as conn:
+        try:
+            columns = _get_table_columns("vacation")
+        except Exception:
+            # Table doesn't exist yet; SQLModel.create_all will create it.
+            return
+
+        schedule_cols = [
+            ("schedule_enabled", "INTEGER", "0"),
+            ("searches_per_day", "INTEGER", "2"),
+            ("last_scheduled_run_at", "TEXT", None),
+            ("next_scheduled_run_at", "TEXT", None),
+            ("schedule_jitter_minutes", "INTEGER", "20"),
+            ("schedule_paused_reason", "TEXT", None),
+            ("schedule_last_status", "TEXT", None),
+            ("schedule_last_message", "TEXT", None),
+        ]
+
+        for col_name, col_type, default in schedule_cols:
+            if col_name not in columns:
+                try:
+                    if default is None:
+                        conn.execute(
+                            text(f"ALTER TABLE vacation ADD COLUMN {col_name} TEXT")
+                        )
+                    else:
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE vacation ADD COLUMN {col_name} {col_type} NOT NULL DEFAULT {default}"
+                            )
+                        )
+                    conn.commit()
+                except Exception:
+                    # Table may have been dropped or renamed between checks; safe to ignore.
+                    pass
 
 
 def _backfill_mock_flags() -> None:

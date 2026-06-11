@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
-from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation
+from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
 from app.db.session import get_session
 from app.services.manifest_io import (
     ManifestValidationError,
@@ -433,6 +433,15 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
             # Phase 5A: search strategy and source policy
             "search_strategy": _build_search_strategy_summary(recent_runs[0] if recent_runs else None),
             "latest_run_source_policy": _build_source_policy_summary(recent_runs[0] if recent_runs else None),
+            # Phase 5B: schedule info
+            "schedule_enabled": bool(vacation.schedule_enabled),
+            "searches_per_day": vacation.searches_per_day or 2,
+            "last_scheduled_run_at": vacation.last_scheduled_run_at,
+            "next_scheduled_run_at": vacation.next_scheduled_run_at,
+            "schedule_jitter_minutes": vacation.schedule_jitter_minutes or 20,
+            "schedule_paused_reason": vacation.schedule_paused_reason,
+            "schedule_last_status": vacation.schedule_last_status,
+            "schedule_last_message": vacation.schedule_last_message,
         },
     )
 
@@ -642,10 +651,20 @@ def edit_vacation(vacation_id: int, request: Request, session: Session = Depends
     vacation = session.get(Vacation, vacation_id)
     if vacation is None:
         return HTMLResponse("Vacation not found", status_code=404)
+    manifest = manifest_for_vacation(vacation)
     return templates.TemplateResponse(
         request,
         "vacation_form.html",
-        {"vacation": vacation, "action": f"/vacations/{vacation.id}/edit", "error": None},
+        {
+            "vacation": vacation,
+            "action": f"/vacations/{vacation.id}/edit",
+            "error": None,
+            # Phase 5B: schedule data for form defaults
+            "schedule_enabled": bool(vacation.schedule_enabled),
+            "searches_per_day": vacation.searches_per_day or 2,
+            "schedule_jitter_minutes": vacation.schedule_jitter_minutes or 20,
+            "schedule_paused_reason": vacation.schedule_paused_reason,
+        },
     )
 
 
@@ -669,6 +688,9 @@ def update_vacation(
     airfare_needed: bool = Form(False),
     rental_car_needed: bool = Form(False),
     special_accommodations: str = Form(""),
+    schedule_enabled: int = Form(0),
+    searches_per_day: int = Form(2),
+    schedule_paused_reason: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
     vacation = session.get(Vacation, vacation_id)
@@ -709,6 +731,37 @@ def update_vacation(
             },
             status_code=400,
         )
+
+    # Phase 5B: update schedule fields separately (not part of manifest)
+    # Handle FastAPI Form() sentinels when called directly from tests
+    _sched_enabled = schedule_enabled
+    if hasattr(_sched_enabled, "__class__") and _sched_enabled.__class__.__name__ == "Form":
+        _sched_enabled = 0
+    vacation.schedule_enabled = int(_sched_enabled or 0)
+
+    _sp = searches_per_day
+    if hasattr(_sp, "__class__") and _sp.__class__.__name__ == "Form":
+        _sp = 2
+    try:
+        sp = max(1, min(3, int(_sp)))
+        vacation.searches_per_day = sp
+    except (TypeError, ValueError):
+        pass
+
+    _paused = schedule_paused_reason
+    if hasattr(_paused, "__class__") and _paused.__class__.__name__ == "Form":
+        _paused = None
+    if _paused is not None and str(_paused).strip():
+        vacation.schedule_paused_reason = str(_paused).strip()
+    elif _sched_enabled == 0:
+        # Clear pause reason when disabling schedule
+        vacation.schedule_paused_reason = None
+    else:
+        vacation.schedule_paused_reason = None
+    vacation.updated_at = utc_now()
+    session.add(vacation)
+    session.commit()
+
     return redirect(f"/vacations/{vacation.id}")
 
 

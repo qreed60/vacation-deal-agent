@@ -289,6 +289,55 @@
       </details>
     {% endif %}
 
+    <!-- Schedule Status -->
+    <div class="section-divider"></div>
+    <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Scheduled searches</h3>
+    {% if schedule_enabled %}
+      <dl class="info-grid">
+        <div class="info-item">
+          <dt>Status</dt>
+          <dd><span class="badge badge-success">Enabled ({{ searches_per_day }}/day)</span></dd>
+        </div>
+        {% if last_scheduled_run_at %}
+          <div class="info-item">
+            <dt>Last scheduled run</dt>
+            <dd>{{ last_scheduled_run_at }}</dd>
+          </div>
+        {% endif %}
+        {% if next_scheduled_run_at %}
+          <div class="info-item">
+            <dt>Next scheduled run</dt>
+            <dd>{{ next_scheduled_run_at }}</dd>
+          </div>
+        {% endif %}
+        {% if schedule_paused_reason %}
+          <div class="info-item" style="grid-column: 1 / -1;">
+            <dt>Paused reason</dt>
+            <dd><span class="badge badge-warning">{{ schedule_paused_reason }}</span></dd>
+          </div>
+        {% endif %}
+        {% if schedule_last_status or schedule_last_message %}
+          <div class="info-item" style="grid-column: 1 / -1;">
+            <dt>Last run result</dt>
+            <dd>
+              {% if schedule_last_status == 'completed' %}
+                <span class="badge badge-success">{{ schedule_last_status }}</span>
+              {% elif schedule_last_status and 'error' in (schedule_last_status or '').lower() %}
+                <span class="badge badge-error">{{ schedule_last_status }}</span>
+              {% else %}
+                <span class="badge badge-warning">{{ schedule_last_status or 'unknown' }}</span>
+              {% endif %}
+              {% if schedule_last_message %}
+                <p style="margin:0.25rem 0 0; font-size:0.85rem; color:var(--text-muted);">{{ schedule_last_message }}</p>
+              {% endif %}
+            </dd>
+          </div>
+        {% endif %}
+      </dl>
+    {% else %}
+      <p style="margin:0 0 1.25rem; font-size:0.92rem; color:var(--text-muted);">Scheduled searches are disabled for this vacation.</p>
+    {% endif %}
+
     <!-- Manifest Snapshot -->
     <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Manifest snapshot</h3>
     <div class="manifest-block">

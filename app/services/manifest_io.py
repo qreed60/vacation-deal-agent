@@ -194,6 +194,13 @@ def manifest_for_vacation(vacation: Vacation) -> dict[str, Any]:
         "special_accommodations": vacation.special_accommodations,
         "preferred_airports": preferred,
         "alternate_airports": alternate,
+        # Phase 5B schedule fields (exported for UI display)
+        "schedule_enabled": bool(vacation.schedule_enabled),
+        "searches_per_day": vacation.searches_per_day or 2,
+        "last_scheduled_run_at": vacation.last_scheduled_run_at,
+        "next_scheduled_run_at": vacation.next_scheduled_run_at,
+        "schedule_jitter_minutes": vacation.schedule_jitter_minutes or 20,
+        "schedule_paused_reason": vacation.schedule_paused_reason,
     }
 
 
@@ -207,6 +214,8 @@ def snapshot_json(manifest: dict[str, Any]) -> str:
 
 def vacation_from_manifest(session: Session, raw_manifest: dict[str, Any]) -> Vacation:
     manifest = normalize_manifest(raw_manifest)
+    # Extract schedule fields if present (Phase 5B), otherwise use defaults
+    sched = manifest.get("schedule", {})
     vacation = Vacation(
         slug=unique_slug(session, manifest["title"], manifest["slug"]),
         title=manifest["title"],
@@ -227,6 +236,13 @@ def vacation_from_manifest(session: Session, raw_manifest: dict[str, Any]) -> Va
         special_accommodations=manifest["special_accommodations"],
         preferred_airports_json=json.dumps(manifest.get("preferred_airports", [])),
         alternate_airports_json=json.dumps(manifest.get("alternate_airports", [])),
+        # Phase 5B schedule fields (defaults to disabled)
+        schedule_enabled=int(sched.get("schedule_enabled", False)),
+        searches_per_day=sched.get("searches_per_day", 2) or 2,
+        last_scheduled_run_at=None,
+        next_scheduled_run_at=None,
+        schedule_jitter_minutes=sched.get("schedule_jitter_minutes", 20) or 20,
+        schedule_paused_reason=sched.get("schedule_paused_reason"),
         manifest_json=snapshot_json(manifest),
     )
     session.add(vacation)
@@ -256,6 +272,19 @@ def update_vacation_from_manifest(session: Session, vacation: Vacation, raw_mani
     vacation.special_accommodations = manifest["special_accommodations"]
     vacation.preferred_airports_json = json.dumps(manifest.get("preferred_airports", []))
     vacation.alternate_airports_json = json.dumps(manifest.get("alternate_airports", []))
+    # Phase 5B: update schedule fields if present in manifest
+    sched = manifest.get("schedule") or {}
+    if "schedule_enabled" in sched:
+        vacation.schedule_enabled = int(sched["schedule_enabled"])
+    if "searches_per_day" in sched:
+        val = sched["searches_per_day"]
+        try:
+            vint = int(val)
+            vacation.searches_per_day = max(1, min(3, vint))
+        except (TypeError, ValueError):
+            pass
+    if "schedule_paused_reason" in sched:
+        vacation.schedule_paused_reason = sched["schedule_paused_reason"] or None
     vacation.manifest_json = snapshot_json(manifest)
     vacation.updated_at = utc_now()
     session.add(vacation)

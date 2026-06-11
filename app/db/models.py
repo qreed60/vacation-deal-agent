@@ -31,6 +31,15 @@ class Vacation(SQLModel, table=True):
     special_accommodations: str = ""
     preferred_airports_json: str = Field(default="[]")
     alternate_airports_json: str = Field(default="[]")
+    # Phase 5B schedule fields
+    schedule_enabled: int = Field(default=0)
+    searches_per_day: int = Field(default=2)
+    last_scheduled_run_at: Optional[str] = None
+    next_scheduled_run_at: Optional[str] = None
+    schedule_jitter_minutes: int = Field(default=20)
+    schedule_paused_reason: Optional[str] = None
+    schedule_last_status: Optional[str] = None
+    schedule_last_message: Optional[str] = None
     manifest_json: str
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

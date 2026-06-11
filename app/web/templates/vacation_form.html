@@ -138,6 +138,27 @@
         </div>
       </fieldset>
 
+      <!-- Schedule Settings -->
+      <fieldset class="fieldset-section">
+        <legend class="fieldset-legend">Scheduled Searches</legend>
+        <div class="form-grid">
+          <div class="form-group" style="max-width:200px;">
+            <label for="schedule_enabled">
+              <input type="checkbox" id="schedule_enabled" name="schedule_enabled" value="1" {% if schedule_enabled or (vacation and vacation.schedule_enabled) %}checked{% endif %}>
+              Enable scheduled searches
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="searches_per_day">Searches per day</label>
+            <select id="searches_per_day" name="searches_per_day">
+              <option value="1" {% if searches_per_day == 1 %}selected{% endif %}>1 (daily at 08:00)</option>
+              <option value="2" {% if searches_per_day == 2 or not searches_per_day %}selected{% endif %}>2 (08:00, 20:00)</option>
+              <option value="3" {% if searches_per_day == 3 %}selected{% endif %}>3 (07:00, 14:00, 21:00)</option>
+            </select>
+          </div>
+        </div>
+      </fieldset>
+
       <!-- Actions -->
       <div class="form-actions">
         <button type="submit" class="btn btn-primary">Save</button>
