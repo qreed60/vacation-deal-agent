@@ -15,6 +15,7 @@ from app.services.manifest_io import (
     update_vacation_from_manifest,
     vacation_from_manifest,
 )
+from app.services.location_suggestions import suggest_locations
 from app.services.price_history import (
     aggregate_daily_ohlc,
     get_source_link_label,
@@ -296,6 +297,11 @@ def form_manifest(
 def dashboard(request: Request, session: Session = Depends(get_session)):
     vacations = session.exec(select(Vacation).order_by(Vacation.created_at.desc())).all()
     return templates.TemplateResponse(request, "dashboard.html", {"vacations": vacations})
+
+
+@router.get("/api/locations/suggest")
+def location_suggestions(q: str = "") -> JSONResponse:
+    return JSONResponse({"suggestions": suggest_locations(q)})
 
 
 @router.get("/vacations/new", response_class=HTMLResponse)

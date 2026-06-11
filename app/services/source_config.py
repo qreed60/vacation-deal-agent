@@ -5,21 +5,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.location_suggestions import CITY_DEFAULT_AIRPORT_MAP
+
 
 # Small fallback city map for known common values.
 _FALLBACK_CITY_MAP: dict[str, str] = {
-    "Pittsburgh, PA": "PIT",
-    "Pittsburgh": "PIT",
-    "Minot, ND": "MOT",
-    "Minot": "MOT",
-    "Orlando, FL": "MCO",
-    "Orlando": "MCO",
-    "Chicago, IL": "ORD",
-    "Chicago": "ORD",
-    "New York, NY": "JFK",
-    "New York": "JFK",
-    "Los Angeles, CA": "LAX",
-    "Los Angeles": "LAX",
+    **CITY_DEFAULT_AIRPORT_MAP,
 }
 
 

@@ -57,11 +57,17 @@
         <div class="form-grid-2">
           <div class="form-group">
             <label for="origin">Origin</label>
-            <input type="text" id="origin" name="origin" value="{{ vacation.origin if vacation else '' }}" required placeholder="e.g. New York (JFK)">
+            <div class="location-autocomplete" data-location-autocomplete>
+              <input type="text" id="origin" name="origin" value="{{ vacation.origin if vacation else '' }}" required placeholder="e.g. New York or JFK" autocomplete="off" data-location-input>
+              <div class="location-suggestions" role="listbox" hidden data-location-suggestions></div>
+            </div>
           </div>
           <div class="form-group">
             <label for="destination">Destination</label>
-            <input type="text" id="destination" name="destination" value="{{ vacation.destination if vacation else '' }}" required placeholder="e.g. Rome (FCO)">
+            <div class="location-autocomplete" data-location-autocomplete>
+              <input type="text" id="destination" name="destination" value="{{ vacation.destination if vacation else '' }}" required placeholder="e.g. Minot or MOT" autocomplete="off" data-location-input>
+              <div class="location-suggestions" role="listbox" hidden data-location-suggestions></div>
+            </div>
           </div>
         </div>
       </fieldset>
@@ -272,6 +278,92 @@
   var initial = getInitialTravelers();
   renderRows(initial);
   updateCount(initial.length);
+})();
+</script>
+
+<script>
+(function() {
+  function debounce(fn, delay) {
+    var timer = null;
+    return function() {
+      var args = arguments;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(function() { fn.apply(null, args); }, delay);
+    };
+  }
+
+  function suggestionMeta(suggestion) {
+    var parts = [];
+    if (suggestion.kind === 'airport' && suggestion.airport_code) {
+      parts.push(suggestion.airport_code);
+    }
+    if (suggestion.kind) {
+      parts.push(suggestion.kind);
+    }
+    if (suggestion.country) {
+      parts.push(suggestion.country);
+    }
+    return parts.join(' · ');
+  }
+
+  function renderSuggestions(container, input, suggestions) {
+    container.innerHTML = '';
+    if (!suggestions.length) {
+      container.hidden = true;
+      return;
+    }
+    suggestions.forEach(function(suggestion) {
+      var option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'location-suggestion';
+      option.setAttribute('role', 'option');
+      option.innerHTML =
+        '<span class="location-suggestion-label"></span>' +
+        '<span class="location-suggestion-meta"></span>';
+      option.querySelector('.location-suggestion-label').textContent = suggestion.display_label || suggestion.value || '';
+      option.querySelector('.location-suggestion-meta').textContent = suggestionMeta(suggestion);
+      option.addEventListener('mousedown', function(event) {
+        event.preventDefault();
+        input.value = suggestion.value || suggestion.display_label || '';
+        container.hidden = true;
+      });
+      container.appendChild(option);
+    });
+    container.hidden = false;
+  }
+
+  function setupAutocomplete(root) {
+    var input = root.querySelector('[data-location-input]');
+    var container = root.querySelector('[data-location-suggestions]');
+    if (!input || !container) return;
+
+    var loadSuggestions = debounce(function() {
+      var query = input.value.trim();
+      if (query.length < 2) {
+        renderSuggestions(container, input, []);
+        return;
+      }
+      window.fetch('/api/locations/suggest?q=' + encodeURIComponent(query), {
+        headers: { 'Accept': 'application/json' }
+      })
+        .then(function(response) { return response.ok ? response.json() : { suggestions: [] }; })
+        .then(function(payload) { renderSuggestions(container, input, payload.suggestions || []); })
+        .catch(function() { renderSuggestions(container, input, []); });
+    }, 120);
+
+    input.addEventListener('input', loadSuggestions);
+    input.addEventListener('focus', loadSuggestions);
+    input.addEventListener('blur', function() {
+      window.setTimeout(function() { container.hidden = true; }, 120);
+    });
+    input.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') {
+        container.hidden = true;
+      }
+    });
+  }
+
+  document.querySelectorAll('[data-location-autocomplete]').forEach(setupAutocomplete);
 })();
 </script>
 

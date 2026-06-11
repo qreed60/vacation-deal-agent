@@ -558,6 +558,55 @@ textarea {
   resize: vertical;
 }
 
+.location-autocomplete {
+  position: relative;
+}
+
+.location-suggestions {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  box-shadow: var(--shadow-md);
+}
+
+.location-suggestion {
+  display: grid;
+  gap: 0.05rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  color: var(--text-body);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.location-suggestion:hover,
+.location-suggestion:focus {
+  outline: none;
+  background: #eff6ff;
+}
+
+.location-suggestion-label {
+  color: var(--text-heading);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.location-suggestion-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
 /* Checkbox pills */
 .checkbox-pills {
   display: flex;
