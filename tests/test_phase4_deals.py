@@ -26,6 +26,7 @@ def session(tmp_path, monkeypatch):
     monkeypatch.setenv("SEARXNG_BASE_URL", "")
     monkeypatch.setenv("AMADEUS_ENABLED", "false")
     monkeypatch.setenv("GOOGLE_PLACES_ENABLED", "false")
+    monkeypatch.setenv("MOCK_SEARCH_ENABLED", "true")
     SQLModel.metadata.drop_all(get_engine())
     init_db()
     with Session(get_engine()) as db_session:
@@ -316,7 +317,9 @@ def test_search_run_creates_phase4_rows_after_mock_run(session):
     assert len(candidates) == 1
     assert summary["priced_snapshot_count"] == 2
     assert summary["deal_candidate_count"] == 1
-    assert summary["best_deal_total_price"] == 1685
+    assert summary["best_deal_total_price"] is None
+    assert all(snapshot.is_mock for snapshot in snapshots)
+    assert all(candidate.is_mock for candidate in candidates)
 
 
 def test_vacation_detail_page_displays_best_deal_when_present(session):
@@ -326,10 +329,8 @@ def test_vacation_detail_page_displays_best_deal_when_present(session):
     response = vacation_detail(vacation.id, request=None, session=session)
 
     assert response.status_code == 200
-    assert response.context["best_deal"] is not None
-    assert response.context["best_deal_components"][0]["provider"] == "Mock Air"
-    assert response.context["best_deal_components"][0]["component_type_label"] == "Airfare"
-    assert response.context["best_deal_components"][0]["link_label"] == "Search reference"
+    assert response.context["best_deal"] is None
+    assert response.context["best_deal_components"] == []
 
 
 def test_existing_vacation_with_no_deal_candidates_renders(session):
@@ -449,8 +450,8 @@ def test_mock_run_vacation_page_renders_provider_source_rows(session):
     response = vacation_detail(vacation.id, request=None, session=session)
 
     assert response.status_code == 200
-    assert b"mock_travel" in response.body
-    assert b"MOCK" in response.body
+    assert response.context["best_deal"] is None
+    assert response.context["latest_deals"] == []
 
 
 def test_deal_detail_context_exposes_component_provider_labels(session):
@@ -832,7 +833,7 @@ def test_price_history_endpoint_page_returns_graph_data(session):
     vacation = create_vacation(session, hotel_needed=False, airfare_needed=True)
     run_search_once(vacation.id, "manual", session=session)
 
-    response = price_history_page(vacation.id, request=None, session=session)
+    response = price_history_page(vacation.id, request=None, session=session, include_mock=1)
 
     assert response.status_code == 200
     assert response.context["history"]["snapshots"]

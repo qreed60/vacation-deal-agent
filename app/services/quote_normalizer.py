@@ -347,6 +347,7 @@ def snapshots_from_source_result(vacation: Vacation, source_result: SourceResult
                 source_url=source_url,
                 normalized_json=deterministic_json(source_payload),
                 captured_at=captured_at,
+                is_mock=bool(source_payload["mock"]),
             )
         )
     return snapshots

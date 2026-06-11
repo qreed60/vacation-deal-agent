@@ -22,6 +22,7 @@ def session(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_PLACES_ENABLED", "false")
     monkeypatch.setenv("SERPAPI_ENABLED", "false")
     monkeypatch.setenv("FAST_FLIGHTS_ENABLED", "false")
+    monkeypatch.setenv("MOCK_SEARCH_ENABLED", "true")
     SQLModel.metadata.drop_all(get_engine())
     init_db()
     with Session(get_engine()) as db_session:

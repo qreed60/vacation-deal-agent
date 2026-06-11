@@ -18,6 +18,7 @@ from app.web.routes import create_search_run
 def session(tmp_path, monkeypatch):
     db_path = tmp_path / "vacation_deals.sqlite3"
     monkeypatch.setenv("VACATION_DEAL_DB_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("MOCK_SEARCH_ENABLED", "true")
     SQLModel.metadata.drop_all(get_engine())
     init_db()
     with Session(get_engine()) as db_session:

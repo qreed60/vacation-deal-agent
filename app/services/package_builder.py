@@ -148,6 +148,10 @@ def _candidate(
         "component_summary": [_component_summary(snapshot) for snapshot in snapshots],
         "components": [_load_json(snapshot.normalized_json) for snapshot in snapshots],
     }
+    is_mock = any(
+        bool(snapshot.is_mock or _component_payload(snapshot).get("is_mock"))
+        for snapshot in snapshots
+    )
     return DealCandidate(
         vacation_id=vacation.id,
         search_run_id=search_run_id,
@@ -159,6 +163,7 @@ def _candidate(
         component_snapshot_ids_json=json.dumps([snapshot.id for snapshot in snapshots]),
         source_links_json=json.dumps(_source_links(snapshots), sort_keys=True),
         normalized_result_json=deterministic_json(normalized),
+        is_mock=is_mock,
     )
 
 

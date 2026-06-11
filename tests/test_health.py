@@ -1,14 +1,9 @@
 """Tests for the /health endpoint."""
 
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-
-client = TestClient(app)
+from app.web.routes import health
 
 
 def test_health_returns_ok() -> None:
-    response = client.get("/health")
+    response = health()
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.body == b'{"status":"ok"}'
