@@ -3,6 +3,7 @@ import os
 import stat
 from unittest.mock import MagicMock, patch
 
+import pytest
 from sqlmodel import Session, SQLModel, select
 
 from app.adapters import trvl_adapter
@@ -404,6 +405,115 @@ sys.exit(7)
     assert "elapsed_seconds" in command_result
     assert command_result["resolved_origin_airport"] == "PIT"
     assert command_result["resolved_destination_airport"] == "MOT"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "adults"),
+    [
+        ("WARNING Skiplagged request failed with HTTP 429\nError: extract flights: unexpected flight data format", 1),
+        ("Error: extract flights: unexpected flight data format", 4),
+    ],
+)
+def test_trvl_provider_failure_is_classified_for_one_and_four_travelers(tmp_path, stderr, adults):
+    binary = make_trvl(
+        tmp_path,
+        f"""
+import sys
+print({stderr!r}, file=sys.stderr)
+sys.exit(1)
+""",
+    )
+
+    result = trvl_adapter.search_trvl_flights(
+        {
+            "origin": "PIT",
+            "destination": "MOT",
+            "start_date": "2026-09-18",
+            "end_date": "2026-09-21",
+            "number_of_travelers": adults,
+        },
+        enabled=True,
+        binary_path=str(binary),
+    )
+
+    normalized = result["normalized_result"]
+    command_result = normalized["command_results"][0]
+
+    assert result["status"] == "error"
+    assert normalized["source_failure_category"] == "provider_error"
+    assert normalized["provider_failure_reason"] == "trvl_provider_rate_limited_or_format_error"
+    assert normalized["latest_trvl_exit_code"] == 1
+    assert normalized["resolved_origin_airport"] == "PIT"
+    assert normalized["resolved_destination_airport"] == "MOT"
+    assert normalized["trvl_adults_passed"] == adults
+    assert normalized["fallback_commands_attempted"] is False
+    assert normalized["fallback_usable_offers"] is False
+    assert command_result["exit_code"] == 1
+    assert command_result["stderr_preview"]
+
+
+def test_trvl_provider_failure_reaches_source_result_and_search_run_summary(tmp_path, monkeypatch):
+    db_path = tmp_path / "db.sqlite3"
+    monkeypatch.setenv("VACATION_DEAL_DB_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AIRPORT_INDEX_DB_PATH", str(tmp_path / "missing.sqlite3"))
+    monkeypatch.setenv("SEARXNG_BASE_URL", "")
+    monkeypatch.setenv("AMADEUS_ENABLED", "false")
+    monkeypatch.setenv("GOOGLE_PLACES_ENABLED", "false")
+    monkeypatch.setenv("SERPAPI_ENABLED", "false")
+    monkeypatch.setenv("FAST_FLIGHTS_ENABLED", "false")
+    monkeypatch.setenv("TRVL_ENABLED", "true")
+    binary = make_trvl(
+        tmp_path,
+        """
+import sys
+print("WARNING Skiplagged request failed with HTTP 429", file=sys.stderr)
+print("Error: extract flights: unexpected flight data format", file=sys.stderr)
+sys.exit(1)
+""",
+    )
+    monkeypatch.setenv("TRVL_BINARY_PATH", str(binary))
+    SQLModel.metadata.drop_all(get_engine())
+    init_db()
+    with Session(get_engine()) as session:
+        vacation = create_vacation(
+            session,
+            origin="Pittsburgh, Pennsylvania, United States",
+            destination="Minot, North Dakota, United States",
+            number_of_travelers=4,
+            travelers=[
+                {"name": "Hanna", "age": 30},
+                {"name": "Emsley", "age": 5},
+                {"name": "Willa", "age": 3},
+                {"name": "Everhett", "age": 0},
+            ],
+            hotel_needed=False,
+            airfare_needed=True,
+        )
+        search_run = run_search_once(vacation.id, "manual", session=session, use_real_sources=True, use_mock=False)
+        trvl_result = session.exec(
+            select(SourceResult).where(SourceResult.search_run_id == search_run.id).where(SourceResult.source_name == "trvl")
+        ).one()
+        normalized = json.loads(trvl_result.normalized_result_json)
+        summary = json.loads(search_run.summary_json)
+
+    assert trvl_result.status == "error"
+    assert normalized["source_failure_category"] == "provider_error"
+    assert normalized["provider_failure_reason"] == "trvl_provider_rate_limited_or_format_error"
+    assert normalized["latest_trvl_exit_code"] == 1
+    assert normalized["resolved_origin_airport"] == "PIT"
+    assert normalized["resolved_destination_airport"] == "MOT"
+    assert normalized["trvl_adults_passed"] == 4
+    assert normalized["fallback_commands_attempted"] is False
+    assert normalized["fallback_usable_offers"] is False
+    assert summary["source_failure_categories"] == {"provider_error": 1}
+    assert summary["latest_trvl_error_category"] == "provider_error"
+    assert summary["latest_trvl_exit_code"] == 1
+    assert "unexpected flight data format" in summary["latest_trvl_error_message"]
+    assert summary["provider_failure_summary"][0]["provider_failure_reason"] == "trvl_provider_rate_limited_or_format_error"
+    assert summary["resolved_origin_airport"] == "PIT"
+    assert summary["resolved_destination_airport"] == "MOT"
+    assert summary["traveler_count"] == 4
+    assert summary["trvl_adults_passed"] == 4
 
 
 def test_ui_manual_route_passes_real_sources_without_mock(tmp_path, monkeypatch):

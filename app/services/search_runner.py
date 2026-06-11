@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlmodel import Session, and_, or_, select
@@ -86,6 +87,51 @@ def _flight_summary_diagnostics(plan: dict[str, Any], config: SourceConfig, mani
             "return_date": query_json.get("return_date"),
         }
     return {}
+
+
+def _json_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _source_failure_summary(source_results: list[SourceResult]) -> dict[str, Any]:
+    categories: dict[str, int] = {}
+    provider_failures: list[dict[str, Any]] = []
+    latest_trvl_error_category = None
+    latest_trvl_exit_code = None
+    latest_trvl_error_message = None
+    for result in source_results:
+        normalized = _json_dict(result.normalized_result_json)
+        category = normalized.get("source_failure_category")
+        reason = normalized.get("provider_failure_reason")
+        if category:
+            categories[str(category)] = categories.get(str(category), 0) + 1
+        if category or reason:
+            entry = {
+                "source_name": result.source_name,
+                "result_type": result.result_type,
+                "status": result.status,
+                "source_failure_category": category,
+                "provider_failure_reason": reason,
+                "error_message": normalized.get("latest_trvl_error_message") or result.error_message,
+            }
+            provider_failures.append(entry)
+        if result.source_name == "trvl" and result.result_type == "flight" and (category or reason):
+            latest_trvl_error_category = category
+            latest_trvl_exit_code = normalized.get("latest_trvl_exit_code")
+            latest_trvl_error_message = normalized.get("latest_trvl_error_message") or result.error_message
+    return {
+        "source_failure_categories": categories,
+        "provider_failure_summary": provider_failures,
+        "latest_trvl_error_category": latest_trvl_error_category,
+        "latest_trvl_exit_code": latest_trvl_exit_code,
+        "latest_trvl_error_message": latest_trvl_error_message,
+    }
 
 
 def _run_real_sources(
@@ -345,6 +391,7 @@ def _run_with_session(
             "status": "completed",
         }
         summary_payload.update(_flight_summary_diagnostics(plan, config, manifest))
+        summary_payload.update(_source_failure_summary(source_results))
         search_run.summary_json = deterministic_json(summary_payload)
         session.add(search_run)
         session.commit()

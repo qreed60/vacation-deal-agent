@@ -151,6 +151,24 @@ def _bounded_string(value: str, limit: int = MAX_EXCERPT_CHARS) -> str:
     return f"{value[:limit].rstrip()}... [truncated]"
 
 
+def _trvl_provider_failure(stderr: str = "", stdout: str = "", message: str = "") -> dict[str, str] | None:
+    combined = "\n".join(part for part in (stderr, stdout, message) if part).lower()
+    if not combined:
+        return None
+    provider_markers = (
+        "429",
+        "unexpected flight data format",
+        "skiplagged",
+        "request failed",
+    )
+    if any(marker in combined for marker in provider_markers):
+        return {
+            "source_failure_category": "provider_error",
+            "provider_failure_reason": "trvl_provider_rate_limited_or_format_error",
+        }
+    return None
+
+
 def _bounded_public_data(value: Any, *, max_depth: int = 4, max_items: int = 20) -> Any:
     if max_depth < 0:
         return _bounded_string(repr(value), 500)
@@ -1148,16 +1166,46 @@ def search_trvl_flights(
 
         # Build error result with bounded diagnostics for all commands
         concise = f"trvl flights exited with code {rt_result.returncode}"
+        fallback_commands_attempted = len(command_results) > 1
+        fallback_usable_offer_count = sum(
+            int(command_result.get("stdout_json_count") or 0)
+            for command_result in command_results
+            if command_result.get("command_label") in ("outbound_one_way", "return_one_way")
+            and int(command_result.get("exit_code") or 0) == 0
+            and command_result.get("stdout_json_success")
+        )
+        provider_failure = _trvl_provider_failure(rt_result.stderr, rt_result.stdout, concise) or {}
+        latest_error_message = _concise_text(rt_result.stderr or rt_result.stdout or concise)
+        normalized_result = {
+            "source_name": SOURCE_NAME,
+            "result_type": "flight",
+            "offers": [],
+            "reason": concise,
+            "latest_trvl_exit_code": rt_result.returncode,
+            "latest_trvl_error_message": latest_error_message,
+            "command_results": command_results[:10],  # bounded to last 10 failures
+            "query": query_json,
+            "resolved_origin_airport": query_json.get("origin_airport"),
+            "resolved_destination_airport": query_json.get("destination_airport"),
+            "origin_resolution_status": query_json.get("origin_resolution_status"),
+            "destination_resolution_status": query_json.get("destination_resolution_status"),
+            "origin_resolution_source": query_json.get("origin_resolution_source"),
+            "destination_resolution_source": query_json.get("destination_resolution_source"),
+            "traveler_count": query_json.get("traveler_count"),
+            "adult_count": query_json.get("adult_count"),
+            "child_count": query_json.get("child_count"),
+            "infant_count": query_json.get("infant_count"),
+            "trvl_adults_passed": query_json.get("trvl_adults_passed"),
+            "trvl_passenger_model": query_json.get("trvl_passenger_model"),
+            "fallback_commands_attempted": fallback_commands_attempted,
+            "fallback_command_count": max(0, len(command_results) - 1),
+            "fallback_usable_offers": fallback_usable_offer_count > 0,
+            "fallback_usable_offer_count": fallback_usable_offer_count,
+        }
+        normalized_result.update(provider_failure)
         return {
             "status": "error",
-            "normalized_result": {
-                "source_name": SOURCE_NAME,
-                "result_type": "flight",
-                "offers": [],
-                "reason": concise,
-                "command_results": command_results[:10],  # bounded to last 10 failures
-                "query": query_json,
-            },
+            "normalized_result": normalized_result,
             "raw_result": rt_raw_summary,
             "error_message": concise,
         }

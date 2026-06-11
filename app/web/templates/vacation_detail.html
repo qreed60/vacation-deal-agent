@@ -94,6 +94,20 @@
       </form>
     </div>
 
+    {% if latest_refresh_status %}
+      <div class="runs-empty-state" style="padding:1rem; margin-bottom:1.25rem; border-left:4px solid var(--warning);">
+        <p style="margin:0; font-weight:700; color:var(--text-heading);">{{ latest_refresh_status.message }}</p>
+        {% if latest_refresh_status.best_deal_is_historical %}
+          <p style="margin:0.4rem 0 0; color:var(--text-muted);">
+            Showing a previous real candidate from run #{{ latest_refresh_status.best_deal_run_id }}{% if latest_refresh_status.best_deal_captured_at %}, captured {{ latest_refresh_status.best_deal_captured_at }}{% endif %}.
+          </p>
+        {% endif %}
+        {% if latest_refresh_status.latest_trvl_error_message %}
+          <p style="margin:0.4rem 0 0; color:var(--text-muted);">Latest trvl error: {{ latest_refresh_status.latest_trvl_error_message }}</p>
+        {% endif %}
+      </div>
+    {% endif %}
+
     <!-- Best Deal -->
     <div class="section-divider"></div>
     <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Best deal</h3>

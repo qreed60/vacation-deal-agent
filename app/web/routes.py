@@ -253,6 +253,39 @@ def component_summary_by_deal_id(deals: list[DealCandidate]) -> dict[int, list[d
     return {deal.id: component_summary_for_deal(deal) for deal in deals if deal.id is not None}
 
 
+def latest_refresh_status(latest_run: SearchRun | None, best_deal: DealCandidate | None) -> dict:
+    if latest_run is None:
+        return {}
+    summary = safe_json_dict(latest_run.summary_json)
+    category = summary.get("latest_trvl_error_category")
+    provider_failures = summary.get("provider_failure_summary")
+    if category != "provider_error" and not provider_failures:
+        return {}
+    latest_run_has_best_deal = bool(best_deal and best_deal.search_run_id == latest_run.id)
+    has_historical_deal = bool(best_deal and not latest_run_has_best_deal)
+    message = "Search completed, but the flight provider failed/rate-limited."
+    if has_historical_deal:
+        message += " Previous results are shown as the best available historical price."
+    else:
+        message += " No fresh priced flight offers were available from this run."
+    component_captured_at = None
+    if best_deal:
+        for component in component_summary_for_deal(best_deal):
+            if component.get("captured_at"):
+                component_captured_at = component["captured_at"]
+                break
+    return {
+        "category": category or "provider_error",
+        "message": message,
+        "latest_run_id": latest_run.id,
+        "latest_run_created_at": latest_run.created_at,
+        "latest_trvl_error_message": summary.get("latest_trvl_error_message"),
+        "best_deal_is_historical": has_historical_deal,
+        "best_deal_run_id": best_deal.search_run_id if best_deal else None,
+        "best_deal_captured_at": component_captured_at or (best_deal.created_at if best_deal else None),
+    }
+
+
 def form_manifest(
     slug: str | None,
     title: str,
@@ -393,6 +426,7 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
             "deal_components_by_id": component_summary_by_deal_id(latest_deals),
             "history_points": history_points,
             "latest_deals": latest_deals,
+            "latest_refresh_status": latest_refresh_status(recent_runs[0] if recent_runs else None, best_deal),
             "vacation": vacation,
             "manifest": json.dumps(manifest, indent=2),
             "recent_runs": recent_runs,

@@ -1,9 +1,10 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlmodel import Session, SQLModel, select
 
-from app.db.models import DealCandidate, PriceSnapshot, SourceResult
+from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult
 from app.db.session import get_engine, init_db
 from app.services.deal_scoring import score_candidate
 from app.services.manifest_io import vacation_from_manifest
@@ -452,6 +453,117 @@ def test_mock_run_vacation_page_renders_provider_source_rows(session):
     assert response.status_code == 200
     assert response.context["best_deal"] is None
     assert response.context["latest_deals"] == []
+
+
+def test_latest_provider_failure_keeps_previous_real_candidate_and_ignores_mock(session):
+    vacation = create_vacation(session, hotel_needed=False, airfare_needed=True)
+    previous_created_at = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    latest_created_at = previous_created_at + timedelta(minutes=5)
+    previous_run = SearchRun(
+        vacation_id=vacation.id,
+        status="completed",
+        trigger_type="manual",
+        summary_json=deterministic_json({"status": "completed", "mock": False}),
+        created_at=previous_created_at,
+        updated_at=previous_created_at,
+    )
+    latest_run = SearchRun(
+        vacation_id=vacation.id,
+        status="completed",
+        trigger_type="manual",
+        summary_json=deterministic_json(
+            {
+                "status": "completed",
+                "mock": False,
+                "deal_candidate_count": 0,
+                "latest_trvl_error_category": "provider_error",
+                "latest_trvl_error_message": "WARNING Skiplagged request failed with HTTP 429\nError: extract flights: unexpected flight data format",
+                "source_failure_categories": {"provider_error": 1},
+                "provider_failure_summary": [
+                    {
+                        "source_name": "trvl",
+                        "result_type": "flight",
+                        "status": "error",
+                        "source_failure_category": "provider_error",
+                        "provider_failure_reason": "trvl_provider_rate_limited_or_format_error",
+                    }
+                ],
+                "resolved_origin_airport": "PIT",
+                "resolved_destination_airport": "MOT",
+                "traveler_count": 4,
+                "trvl_adults_passed": 4,
+            }
+        ),
+        created_at=latest_created_at,
+        updated_at=latest_created_at,
+    )
+    session.add(previous_run)
+    session.add(latest_run)
+    session.commit()
+    session.refresh(previous_run)
+    session.refresh(latest_run)
+    real_deal = DealCandidate(
+        vacation_id=vacation.id,
+        search_run_id=previous_run.id,
+        candidate_type="flight_only",
+        title="Previous real fare",
+        status="valid",
+        total_price=425,
+        currency="USD",
+        score=1,
+        normalized_result_json=deterministic_json(
+            {
+                "component_summary": [
+                    {
+                        "component_type": "flight",
+                        "component_type_label": "Airfare",
+                        "provider": "Delta Air Lines",
+                        "source_name": "trvl",
+                        "source_name_label": "trvl",
+                        "label": "PIT to MOT",
+                        "total_price": 425,
+                        "currency": "USD",
+                        "captured_at": "2026-06-10T12:00:00+00:00",
+                    }
+                ]
+            }
+        ),
+        source_links_json="[]",
+        is_mock=False,
+    )
+    mock_deal = DealCandidate(
+        vacation_id=vacation.id,
+        search_run_id=latest_run.id,
+        candidate_type="flight_only",
+        title="Mock fallback fare",
+        status="valid",
+        total_price=50,
+        currency="USD",
+        score=0.1,
+        normalized_result_json=deterministic_json(
+            {"component_summary": [{"provider": "Mock Air", "source_name": "mock_travel", "mock": True}]}
+        ),
+        source_links_json=deterministic_json([{"source_name": "mock_travel"}]),
+        is_mock=True,
+    )
+    session.add(real_deal)
+    session.add(mock_deal)
+    session.commit()
+    session.refresh(real_deal)
+    session.refresh(mock_deal)
+
+    response = vacation_detail(vacation.id, request=None, session=session)
+
+    assert response.status_code == 200
+    assert response.context["best_deal"].id == real_deal.id
+    assert [deal.id for deal in response.context["latest_deals"]] == [real_deal.id]
+    assert response.context["latest_refresh_status"]["category"] == "provider_error"
+    assert response.context["latest_refresh_status"]["best_deal_is_historical"] is True
+    assert response.context["latest_refresh_status"]["best_deal_captured_at"] == "2026-06-10T12:00:00+00:00"
+    assert b"flight provider failed/rate-limited" in response.body
+    assert b"captured 2026-06-10T12:00:00+00:00" in response.body
+    assert b"Previous real fare" in response.body
+    assert b"Mock fallback fare" not in response.body
 
 
 def test_deal_detail_context_exposes_component_provider_labels(session):
