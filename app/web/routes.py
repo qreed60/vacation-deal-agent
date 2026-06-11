@@ -19,7 +19,6 @@ from app.services.price_history import (
     aggregate_daily_ohlc,
     get_source_link_label,
     is_google_flights_url,
-    svg_line_points,
     svg_ohlc_candles,
     vacation_price_history,
 )
@@ -377,7 +376,8 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
     best_deal = best_deal_for_vacation(session, vacation_id)
     latest_deals = deal_candidates_for_vacation(session, vacation_id)[:5]
     history = vacation_price_history(session, vacation_id)
-    history_rows = history["deals"] or history["snapshots"]
+    ohlc_data = history["ohlc"]
+    history_points = svg_ohlc_candles(ohlc_data) if ohlc_data else ""
     return templates.TemplateResponse(
         request,
         "vacation_detail.html",
@@ -385,7 +385,7 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
             "best_deal": best_deal,
             "best_deal_components": component_summary_for_deal(best_deal),
             "deal_components_by_id": component_summary_by_deal_id(latest_deals),
-            "history_points": svg_line_points(history_rows),
+            "history_points": history_points,
             "latest_deals": latest_deals,
             "vacation": vacation,
             "manifest": json.dumps(manifest, indent=2),
@@ -399,7 +399,13 @@ def create_search_run(vacation_id: int, session: Session = Depends(get_session))
     vacation = session.get(Vacation, vacation_id)
     if vacation is None:
         return HTMLResponse("Vacation not found", status_code=404)
-    run_search_once(vacation_id, "manual", session=session)
+    run_search_once(
+        vacation_id,
+        "manual",
+        use_real_sources=True,
+        use_mock=False,
+        session=session,
+    )
     return redirect(f"/vacations/{vacation_id}")
 
 

@@ -133,9 +133,8 @@
 
     {% if history_points %}
       <h3 style="font-size:1rem; color:var(--text-heading); margin:1.25rem 0 0.75rem;">Price history</h3>
-      <svg class="price-chart" viewBox="0 0 640 180" role="img" aria-label="Price history graph">
-        <line x1="24" y1="156" x2="624" y2="156" class="chart-axis"></line>
-        <polyline points="{{ history_points }}" class="chart-line"></polyline>
+      <svg class="price-chart" viewBox="0 0 640 180" role="img" aria-label="Price history OHLC chart">
+        {{ history_points | safe }}
       </svg>
       <p style="margin:0 0 1.25rem;"><a href="/vacations/{{ vacation.id }}/price-history">View price history data →</a></p>
     {% endif %}

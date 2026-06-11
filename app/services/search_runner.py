@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, and_, or_, select
 
 from app.adapters import amadeus, fast_flights_adapter, google_places, mock_travel, searxng, serpapi_travel, trvl_adapter
 from app.db.models import DealCandidate, PriceSnapshot, SearchRun, SourceResult, Vacation, utc_now
@@ -253,8 +253,14 @@ def _run_with_session(
             timeout_seconds=config.amadeus_timeout_seconds,
         )
         manifest = manifest_for_vacation(vacation)
+
+        # Respect MOCK_SEARCH_ENABLED: never generate mock data when disabled
+        effective_use_mock = use_mock and config.mock_search_enabled
+        if use_mock and not config.mock_search_enabled:
+            status_counts["mock_disabled"] = 1
+
         for query_entry in plan["queries"]:
-            if use_mock:
+            if effective_use_mock:
                 adapter_result = mock_travel.search(query_entry)
                 _persist_adapter_result(
                     session,
@@ -300,7 +306,7 @@ def _run_with_session(
                 "best_deal_id": best_deal.id if best_deal else None,
                 "best_deal_total_price": best_deal.total_price if best_deal else None,
                 "deal_candidate_count": len(deal_candidates),
-                "mock": use_mock,
+                "mock": effective_use_mock,
                 "priced_snapshot_count": len(price_snapshots),
                 "real_sources": use_real_sources,
                 "source_result_count": result_count,
@@ -368,6 +374,53 @@ def price_snapshots_for_run(session: Session, search_run_id: int) -> list[PriceS
     return list(session.exec(statement).all())
 
 
+def _legacy_mock_candidate_filter():
+    mock_search_run = (
+        select(SearchRun.id)
+        .where(SearchRun.id == DealCandidate.search_run_id)
+        .where(
+            or_(
+                SearchRun.summary_json.contains('"mock":true'),
+                SearchRun.summary_json.contains('"mock": true'),
+                and_(
+                    or_(
+                        SearchRun.summary_json.contains('"real_sources":false'),
+                        SearchRun.summary_json.contains('"real_sources": false'),
+                    ),
+                    SearchRun.summary_json.contains('"mock"'),
+                ),
+            )
+        )
+        .exists()
+    )
+    real_source_result_in_run = (
+        select(SourceResult.id)
+        .where(SourceResult.search_run_id == DealCandidate.search_run_id)
+        .where(SourceResult.source_name != "mock_travel")
+        .where(SourceResult.status != "mock")
+        .exists()
+    )
+    mock_only_source_result_run = (
+        select(SourceResult.id)
+        .where(SourceResult.search_run_id == DealCandidate.search_run_id)
+        .where(or_(SourceResult.source_name == "mock_travel", SourceResult.status == "mock"))
+        .where(~real_source_result_in_run)
+        .exists()
+    )
+    return or_(
+        DealCandidate.title.contains("MOCK"),
+        DealCandidate.title.contains("Mock Air"),
+        DealCandidate.source_links_json.contains("mock_travel"),
+        DealCandidate.source_links_json.contains('"source":"mock"'),
+        DealCandidate.source_links_json.contains('"source": "mock"'),
+        DealCandidate.normalized_result_json.contains("mock_travel"),
+        DealCandidate.normalized_result_json.contains('"mock":true'),
+        DealCandidate.normalized_result_json.contains('"mock": true'),
+        mock_search_run,
+        mock_only_source_result_run,
+    )
+
+
 def deal_candidates_for_vacation(
     session: Session,
     vacation_id: int,
@@ -376,9 +429,11 @@ def deal_candidates_for_vacation(
     statement = (
         select(DealCandidate)
         .where(DealCandidate.vacation_id == vacation_id)
-        .where(DealCandidate.is_mock == False if not include_mock else DealCandidate.is_mock.isnot(None))
-        .order_by(DealCandidate.id.asc())
+        .where(DealCandidate.status == "valid")
+        .where(DealCandidate.score.is_not(None))
     )
+    if not include_mock:
+        statement = statement.where(DealCandidate.is_mock == False).where(~_legacy_mock_candidate_filter())
     candidates = list(session.exec(statement).all())
     return sorted(
         candidates,
@@ -402,10 +457,11 @@ def best_deal_for_vacation(
         .where(DealCandidate.vacation_id == vacation_id)
         .where(DealCandidate.status == "valid")
         .where(DealCandidate.score.is_not(None))
-        .where(DealCandidate.is_mock == False if not include_mock else DealCandidate.is_mock.isnot(None))
         .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.desc())
         .limit(1)
     )
+    if not include_mock:
+        statement = statement.where(DealCandidate.is_mock == False).where(~_legacy_mock_candidate_filter())
     candidates = list(session.exec(statement).all())
     return candidates[0] if candidates else None
 
@@ -416,6 +472,8 @@ def best_deal_for_run(session: Session, search_run_id: int) -> DealCandidate | N
         .where(DealCandidate.search_run_id == search_run_id)
         .where(DealCandidate.status == "valid")
         .where(DealCandidate.score.is_not(None))
+        .where(DealCandidate.is_mock == False)
+        .where(~_legacy_mock_candidate_filter())
         .order_by(DealCandidate.score.asc(), DealCandidate.total_price.asc(), DealCandidate.id.desc())
         .limit(1)
     ).all()

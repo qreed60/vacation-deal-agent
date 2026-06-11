@@ -156,6 +156,7 @@ class SourceConfig:
     trvl_broad_include_one_way_fallbacks: bool
     trvl_broad_max_alternatives: int
     trvl_broad_allow_risky_alternatives: bool
+    mock_search_enabled: bool
 
 
 def load_source_config() -> SourceConfig:
@@ -191,4 +192,5 @@ def load_source_config() -> SourceConfig:
         trvl_broad_include_one_way_fallbacks=env_bool("TRVL_BROAD_INCLUDE_ONE_WAY_FALLBACKS", True),
         trvl_broad_max_alternatives=int(env_value("TRVL_BROAD_MAX_ALTERNATIVES", "50")),
         trvl_broad_allow_risky_alternatives=env_bool("TRVL_BROAD_ALLOW_RISKY_ALTERNATIVES", True),
+        mock_search_enabled=env_bool("MOCK_SEARCH_ENABLED", False),
     )

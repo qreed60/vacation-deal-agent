@@ -276,51 +276,89 @@ def svg_line_points(history_rows: list[dict[str, Any]], *, width: int = 640, hei
     return " ".join(points)
 
 
+def _prefer_usd_ohlc(ohlc_data):
+    """Filter OHLC data to prefer USD. Returns (filtered_data, exclusion_note)."""
+    if not ohlc_data:
+        return [], None
+
+    by_currency = {}
+    for d in ohlc_data:
+        cur = d.get("currency", "USD") or "USD"
+        by_currency.setdefault(cur, []).append(d)
+
+    if "USD" in by_currency and len(by_currency) > 1:
+        excluded = [c for c in by_currency if c != "USD"]
+        note = f"Excluded non-USD currencies: {', '.join(excluded)}"
+        return by_currency["USD"], note
+
+    if len(by_currency) == 1:
+        return ohlc_data, None
+
+    best_currency = max(by_currency.keys(), key=lambda c: len(by_currency[c]))
+    excluded = [c for c in by_currency if c != best_currency]
+    note = f"Excluded non-{best_currency} currencies: {', '.join(excluded)}"
+    return by_currency[best_currency], note
+
+
 def svg_ohlc_candles(
-    ohlc_data: list[dict[str, Any]],
+    ohlc_data,
     *,
-    width: int = 640,
-    height: int = 180,
-) -> str:
+    width=640,
+    height=180,
+):
     """
-    Generate SVG for OHLC candlestick/bar chart.
-    Uses vertical bars with open/close ticks.
+    Generate SVG for true OHLC candlestick chart.
+
+    Each candle has:
+      - A vertical wick from low to high
+      - A rectangular body from open to close
+      - Green (#22c55e) if close > open (bullish)
+      - Red (#ef4444) if close < open (bearish)
+      - Gray (#9ca3af) if close == open (flat)
+
+    If multiple currencies exist in the data, USD is preferred and a note
+    is added listing excluded currencies.
     """
     if not ohlc_data:
         return ""
-    
+
+    # Apply USD preference filtering
+    ohlc_data, exclusion_note = _prefer_usd_ohlc(ohlc_data)
+    if not ohlc_data:
+        return ""
+
     left = 40
     right = width - 16
     top = 16
     bottom = height - 36  # Leave room for X-axis labels
-    
-    # Get price range
+
+    # Get price range from wick extremes
     all_prices = []
     for d in ohlc_data:
         all_prices.extend([d["low"], d["high"]])
-    
+
     if not all_prices:
         return ""
-    
+
     min_price = min(all_prices)
     max_price = max(all_prices)
     price_span = max(1.0, max_price - min_price)
-    
+
     x_span = right - left
     y_span = bottom - top
-    
+
     n = len(ohlc_data)
     if n == 0:
         return ""
-    
+
     # Calculate bar width and spacing
     bar_width = max(4, min(20, x_span / n * 0.7))
     spacing = x_span / n
     center_offset = spacing / 2
-    
+
     svg_parts = []
-    
-    # Draw grid lines
+
+    # Draw grid lines with price labels on Y-axis
     grid_count = 5
     for i in range(grid_count + 1):
         y = top + (y_span * i / grid_count)
@@ -328,53 +366,73 @@ def svg_ohlc_candles(
         svg_parts.append(
             f'<line x1="{left}" y1="{y}" x2="{right}" y2="{y}" stroke="#e0e0e0" stroke-width="1"/>'
         )
-        # Price label
+        # Price label on left axis
         svg_parts.append(
             f'<text x="{left - 4}" y="{y + 4}" text-anchor="end" font-size="10" fill="#666">${price_val:.0f}</text>'
         )
-    
-    # Draw OHLC bars
+
+    # Draw candlesticks
     for i, d in enumerate(ohlc_data):
         x_center = left + (i * spacing) + center_offset
         x_left = x_center - bar_width / 2
         x_right = x_center + bar_width / 2
-        
-        # Calculate Y positions
+
+        # Calculate Y positions (SVG y increases downward)
         y_high = bottom - ((d["high"] - min_price) / price_span * y_span)
         y_low = bottom - ((d["low"] - min_price) / price_span * y_span)
         y_open = bottom - ((d["open"] - min_price) / price_span * y_span)
         y_close = bottom - ((d["close"] - min_price) / price_span * y_span)
-        
-        # Determine color (green if close >= open, red otherwise)
-        color = "#22c55e" if d["close"] >= d["open"] else "#ef4444"
-        
-        # Draw vertical line (high to low)
+
+        # Determine candle class and color
+        if d["close"] > d["open"]:
+            candle_class = "candle-up"
+            color = "#22c55e"  # Green
+        elif d["close"] < d["open"]:
+            candle_class = "candle-down"
+            color = "#ef4444"  # Red
+        else:
+            candle_class = "candle-flat"
+            color = "#9ca3af"  # Gray
+
+        # Clamp body coordinates to chart area
+        y_body_top = min(y_open, y_close)
+        y_body_bottom = max(y_open, y_close)
+        body_height = max(1, y_body_bottom - y_body_top)
+
+        # Draw vertical wick (low to high)
         svg_parts.append(
-            f'<line x1="{x_center}" y1="{y_high}" x2="{x_center}" y2="{y_low}" stroke="{color}" stroke-width="2"/>'
+            f'<line x1="{x_center}" y1="{y_high}" x2="{x_center}" y2="{y_low}" '
+            f'stroke="{color}" stroke-width="1.5" class="wick"/>'
         )
-        
-        # Draw open tick
+
+        # Draw rectangular body (open to close)
         svg_parts.append(
-            f'<line x1="{x_left}" y1="{y_open}" x2="{x_center}" y2="{y_open}" stroke="{color}" stroke-width="2"/>'
+            f'<rect x="{x_left}" y="{y_body_top}" width="{bar_width}" height="{body_height}" '
+            f'fill="{color}" stroke="{color}" stroke-width="0.5" class="{candle_class}"/>'
         )
-        
-        # Draw close tick
-        svg_parts.append(
-            f'<line x1="{x_center}" y1="{y_close}" x2="{x_right}" y2="{y_close}" stroke="{color}" stroke-width="2"/>'
-        )
-        
-        # Date label on X axis
-        date_label = d["date"][5:]  # MM-DD format
+
+        # Date label on X axis (MM-DD format)
+        date_label = d["date"][5:]  # Extract MM-DD from YYYY-MM-DD
         svg_parts.append(
             f'<text x="{x_center}" y="{bottom + 14}" text-anchor="middle" font-size="9" fill="#666">{date_label}</text>'
         )
-    
-    # Axis labels
+
+    # Currency note if non-USD currencies were excluded
+    if exclusion_note:
+        svg_parts.append(
+            f'<text x="{right}" y="{top + 12}" text-anchor="end" font-size="9" fill="#f59e0b">'
+            f'{exclusion_note}</text>'
+        )
+
+    # X-axis label (Date)
     svg_parts.append(
         f'<text x="{width / 2}" y="{height - 2}" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Date</text>'
     )
+
+    # Y-axis label (Price) rotated vertically on the left
     svg_parts.append(
-        f'<text x="12" y="{height / 2}" text-anchor="middle" font-size="11" font-weight="600" fill="#333" transform="rotate(-90, 12, {height / 2})">Price</text>'
+        f'<text x="12" y="{height / 2}" text-anchor="middle" font-size="11" font-weight="600" fill="#333" '
+        f'transform="rotate(-90, 12, {height / 2})">Price</text>'
     )
-    
+
     return "\n".join(svg_parts)
