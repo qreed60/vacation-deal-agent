@@ -99,16 +99,114 @@ def _json_dict(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _source_failure_summary(source_results: list[SourceResult]) -> dict[str, Any]:
+# Source status classification constants
+SOURCE_STATUS_SUCCESS_WITH_DEALS = "success_with_deals"
+SOURCE_STATUS_SUCCESS_NO_DEALS = "success_no_deals"
+SOURCE_STATUS_PROVIDER_ERROR = "provider_error"
+SOURCE_STATUS_CONFIG_DISABLED = "config_disabled"
+SOURCE_STATUS_ROUTE_RESOLUTION_ERROR = "route_resolution_error"
+SOURCE_STATUS_RESEARCH_FALLBACK_ONLY = "research_fallback_only"
+SOURCE_STATUS_SOURCE_UNAVAILABLE = "source_unavailable"
+SOURCE_STATUS_TIMEOUT = "timeout"
+SOURCE_STATUS_PARSE_ERROR = "parse_error"
+
+# Structured priced source names (priority order)
+STRUCTURED_PRICED_SOURCES = ["trvl", "serpapi_google_flights", "amadeus", "fast_flights"]
+
+
+def _classify_source_status(result: SourceResult, config: SourceConfig | None = None) -> str:
+    """Classify a source result into a standardized status category."""
+    normalized = _json_dict(result.normalized_result_json)
+
+    # Check for explicit failure categories first
+    category = normalized.get("source_failure_category")
+    if category == "provider_error":
+        return SOURCE_STATUS_PROVIDER_ERROR
+    if category == "route_resolution_error":
+        return SOURCE_STATUS_ROUTE_RESOLUTION_ERROR
+
+    # Check result type and offers/hotels count
+    result_type = result.result_type
+    if result.status == "skipped":
+        reason = (normalized.get("reason") or "").lower()
+        # Route resolution errors take priority over config disabled check below
+        if "resolve" in reason or "airport" in reason:
+            return SOURCE_STATUS_ROUTE_RESOLUTION_ERROR
+        if "enabled" in reason or "config" in reason:
+            return SOURCE_STATUS_CONFIG_DISABLED
+        return SOURCE_STATUS_SOURCE_UNAVAILABLE
+
+    if result.status == "error":
+        error_msg = (result.error_message or "").lower()
+        normalized_reason = (normalized.get("reason") or "").lower()
+        combined = f"{error_msg} {normalized_reason}"
+        if "429" in combined or "rate limit" in combined:
+            return SOURCE_STATUS_PROVIDER_ERROR
+        if "timeout" in combined or "timed out" in combined:
+            return SOURCE_STATUS_TIMEOUT
+        if "parse" in combined or "format" in combined:
+            return SOURCE_STATUS_PARSE_ERROR
+        # Generic error - check for provider_error category from trvl
+        if result.source_name == "trvl":
+            trvl_failure = normalized.get("provider_failure_reason")
+            if trvl_failure and "provider" in str(trvl_failure).lower():
+                return SOURCE_STATUS_PROVIDER_ERROR
+        return SOURCE_STATUS_SOURCE_UNAVAILABLE
+
+    # Completed status - check for deals
+    offers = normalized.get("offers", []) or []
+    hotels = normalized.get("hotels", []) or []
+    if result_type == "flight" and len(offers) > 0:
+        return SOURCE_STATUS_SUCCESS_WITH_DEALS
+    if result_type == "hotel" and len(hotels) > 0:
+        return SOURCE_STATUS_SUCCESS_WITH_DEALS
+    if offers or hotels:
+        return SOURCE_STATUS_SUCCESS_NO_DEALS
+
+    # Web context / research results
+    if result_type in ("web_context", "research_fallback"):
+        return SOURCE_STATUS_RESEARCH_FALLBACK_ONLY
+
+    return SOURCE_STATUS_SUCCESS_NO_DEALS
+
+
+def _classify_searxng_result(result: SourceResult) -> str:
+    """Classify SearXNG result as research_fallback or web_context."""
+    normalized = _json_dict(result.normalized_result_json)
+    results_list = normalized.get("results", [])
+    if not isinstance(results_list, list):
+        return SOURCE_STATUS_RESEARCH_FALLBACK_ONLY
+
+    # Check if any results have confident price extraction
+    has_confident_price = False
+    for r in results_list:
+        if not isinstance(r, dict):
+            continue
+        # Only classify as having confident price if ALL required fields are present
+        if (r.get("url") and r.get("title") and r.get("content")
+                and "price" in str(r.get("content", "")).lower()):
+            has_confident_price = True
+
+    return SOURCE_STATUS_RESEARCH_FALLBACK_ONLY
+
+
+def _source_failure_summary(source_results: list[SourceResult], config: SourceConfig | None = None) -> dict[str, Any]:
     categories: dict[str, int] = {}
     provider_failures: list[dict[str, Any]] = []
     latest_trvl_error_category = None
     latest_trvl_exit_code = None
     latest_trvl_error_message = None
+    source_statuses: dict[str, str] = {}
+
     for result in source_results:
         normalized = _json_dict(result.normalized_result_json)
         category = normalized.get("source_failure_category")
         reason = normalized.get("provider_failure_reason")
+
+        # Classify status
+        status_class = _classify_source_status(result, config)
+        source_statuses[result.source_name] = status_class
+
         if category:
             categories[str(category)] = categories.get(str(category), 0) + 1
         if category or reason:
@@ -125,12 +223,14 @@ def _source_failure_summary(source_results: list[SourceResult]) -> dict[str, Any
             latest_trvl_error_category = category
             latest_trvl_exit_code = normalized.get("latest_trvl_exit_code")
             latest_trvl_error_message = normalized.get("latest_trvl_error_message") or result.error_message
+
     return {
         "source_failure_categories": categories,
         "provider_failure_summary": provider_failures,
         "latest_trvl_error_category": latest_trvl_error_category,
         "latest_trvl_exit_code": latest_trvl_exit_code,
         "latest_trvl_error_message": latest_trvl_error_message,
+        "source_statuses": source_statuses,
     }
 
 
@@ -155,6 +255,7 @@ def _run_real_sources(
         web_query["query"]["text"],
         base_url=config.searxng_base_url,
         timeout_seconds=config.searxng_timeout_seconds,
+        max_results=config.searxng_max_results,
     )
     statuses.append(_persist_adapter_result(session, search_run_id, "searxng", "web_context", web_query, web_result))
 
@@ -378,6 +479,65 @@ def _run_with_session(
         completed_at = utc_now()
         search_run.completed_at = completed_at
         search_run.updated_at = completed_at
+
+        # Build source policy summary
+        source_results = source_results_for_run(session, search_run.id)
+        failure_summary = _source_failure_summary(source_results, config)
+        source_statuses = failure_summary.get("source_statuses", {})
+
+        # Determine structured source counts
+        attempted_structured: list[str] = []
+        skipped_structured: list[str] = []
+        structured_success_count = 0
+        structured_provider_error_count = 0
+
+        for src_name in STRUCTURED_PRICED_SOURCES:
+            src_status = source_statuses.get(src_name, "")
+            if src_status == SOURCE_STATUS_CONFIG_DISABLED:
+                skipped_structured.append(src_name)
+            elif src_status == SOURCE_STATUS_PROVIDER_ERROR:
+                attempted_structured.append(src_name)
+                structured_provider_error_count += 1
+            elif src_status in (SOURCE_STATUS_SUCCESS_WITH_DEALS, SOURCE_STATUS_SUCCESS_NO_DEALS):
+                attempted_structured.append(src_name)
+                if src_status == SOURCE_STATUS_SUCCESS_WITH_DEALS:
+                    structured_success_count += 1
+            else:
+                # source_unavailable, timeout, parse_error - still attempted
+                attempted_structured.append(src_name)
+
+        # Determine best available result type
+        has_exact_priced = any(
+            s in (SOURCE_STATUS_SUCCESS_WITH_DEALS,)
+            for s in source_statuses.values()
+        )
+        has_research_fallback = SOURCE_STATUS_RESEARCH_FALLBACK_ONLY in source_statuses.values()
+        latest_error_summary = failure_summary.get("latest_trvl_error_message") or ""
+
+        if has_exact_priced:
+            best_available_result_type = "exact_priced_deal"
+        elif any(
+            s == SOURCE_STATUS_SUCCESS_NO_DEALS
+            for s in source_statuses.values()
+        ):
+            best_available_result_type = "estimated_priced_deal"
+        elif has_research_fallback:
+            best_available_result_type = "research_fallback"
+        else:
+            best_available_result_type = "none"
+
+        # Build search plan summary from the stored plan
+        plan_data = _json_dict(search_run.search_plan_json)
+        ai_planner_enabled = config.ai_search_planner_enabled and config.ai_search_planner_provider not in ("disabled", "none", "")
+        research_fallback_used = False
+        research_fallback_source = None
+
+        # Check if SearXNG was used as fallback
+        searxng_status = source_statuses.get("searxng", "")
+        if searxng_status == SOURCE_STATUS_RESEARCH_FALLBACK_ONLY:
+            research_fallback_used = True
+            research_fallback_source = "searxng"
+
         summary_payload = {
             "best_deal_currency": best_deal.currency if best_deal else None,
             "best_deal_id": best_deal.id if best_deal else None,
@@ -389,9 +549,38 @@ def _run_with_session(
             "source_result_count": result_count,
             "source_status_counts": status_counts,
             "status": "completed",
+            # Source policy fields (Phase 5A)
+            "source_policy_version": "phase5a_v1",
+            "attempted_sources": attempted_structured,
+            "skipped_sources": skipped_structured,
+            "source_failure_categories": failure_summary.get("source_failure_categories", {}),
+            "structured_source_count": len(attempted_structured) + len(skipped_structured),
+            "structured_success_count": structured_success_count,
+            "structured_provider_error_count": structured_provider_error_count,
+            "research_fallback_used": research_fallback_used,
+            "research_fallback_source": research_fallback_source,
+            "best_available_result_type": best_available_result_type,
+            # Backwards-compatible trvl error fields (kept for existing tests)
+            "latest_trvl_error_category": failure_summary.get("latest_trvl_error_category"),
+            "latest_trvl_exit_code": failure_summary.get("latest_trvl_exit_code"),
+            "latest_trvl_error_message": failure_summary.get("latest_trvl_error_message") or "",
+            # Backwards-compatible provider_failure_summary (kept for existing tests)
+            "provider_failure_summary": failure_summary.get("provider_failure_summary", []),
+            "latest_error_summary": latest_error_summary,
         }
+
+        # Add AI planner info if available
+        if plan_data:
+            summary_payload["search_plan"] = {
+                "planner_version": plan_data.get("planner_version", ""),
+                "objective": plan_data.get("objective", ""),
+                "reasoning_summary": plan_data.get("reasoning_summary", ""),
+                "search_count": len(plan_data.get("searches") or []),
+                "fallback_search_count": len(plan_data.get("fallback_searches") or []),
+                "research_query_count": len(plan_data.get("research_queries") or []),
+            }
+
         summary_payload.update(_flight_summary_diagnostics(plan, config, manifest))
-        summary_payload.update(_source_failure_summary(source_results))
         search_run.summary_json = deterministic_json(summary_payload)
         session.add(search_run)
         session.commit()

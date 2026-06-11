@@ -235,6 +235,60 @@
       </div>
     {% endif %}
 
+    <!-- Search Strategy -->
+    {% if search_strategy %}
+      <div class="section-divider"></div>
+      <details>
+        <summary style="cursor:pointer; font-weight:600; color:var(--text-heading);">Search strategy</summary>
+        <div class="search-strategy" style="margin-top:0.75rem; padding:1rem; background:var(--bg-secondary); border-radius:8px;">
+          {% if search_strategy.planner_version %}
+            <p style="margin:0 0 0.5rem;"><strong>Planner:</strong> {{ 'AI' if search_strategy.is_ai else 'Deterministic baseline' }} ({{ search_strategy.planner_version }})</p>
+          {% endif %}
+          {% if search_strategy.objective %}
+            <p style="margin:0 0 0.5rem;"><strong>Objective:</strong> {{ search_strategy.objective }}</p>
+          {% endif %}
+          {% if search_strategy.search_count or search_strategy.fallback_search_count %}
+            <p style="margin:0 0 0.5rem;">
+              <strong>Planned searches:</strong>
+              {{ search_strategy.search_count }} primary{% if search_strategy.fallback_search_count %}, {{ search_strategy.fallback_search_count }} fallback{% endif %}
+            </p>
+          {% endif %}
+          {% if search_strategy.research_query_count %}
+            <p style="margin:0 0 0.5rem;"><strong>Research queries:</strong> {{ search_strategy.research_query_count }}</p>
+          {% endif %}
+          {% if search_strategy.reasoning_summary %}
+            <p style="margin:0 0 0.5rem; font-style:italic; color:var(--text-muted);">{{ search_strategy.reasoning_summary }}</p>
+          {% endif %}
+          {% if latest_run_source_policy %}
+            <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border-color);">
+              <p style="margin:0 0 0.25rem;"><strong>Source policy:</strong></p>
+              {% if latest_run_source_policy.attempted_sources %}
+                <p style="margin:0 0 0.25rem; font-size:0.85rem;">Attempted: {{ latest_run_source_policy.attempted_sources | join(', ') }}</p>
+              {% endif %}
+              {% if latest_run_source_policy.skipped_sources %}
+                <p style="margin:0 0 0.25rem; font-size:0.85rem;">Skipped (disabled): {{ latest_run_source_policy.skipped_sources | join(', ') }}</p>
+              {% endif %}
+              {% if latest_run_source_policy.best_available_result_type == 'exact_priced_deal' %}
+                <span class="badge badge-success">Exact priced deals found</span>
+              {% elif latest_run_source_policy.best_available_result_type == 'estimated_priced_deal' %}
+                <span class="badge badge-warning">No exact deals — estimated only</span>
+              {% elif latest_run_source_policy.best_available_result_type == 'research_fallback' %}
+                <span class="badge badge-error">Research fallback only — verify manually</span>
+              {% else %}
+                <span class="badge badge-error">{{ latest_run_source_policy.best_available_result_type | title }}</span>
+              {% endif %}
+              {% if latest_run_source_policy.research_fallback_used %}
+                <p style="margin:0.25rem 0 0; font-size:0.85rem;">Research fallback used via {{ latest_run_source_policy.research_fallback_source or 'searxng' }}</p>
+              {% endif %}
+              {% if latest_run_source_policy.latest_error_summary %}
+                <p style="margin:0.25rem 0 0; font-size:0.85rem; color:var(--text-muted);">Latest error: {{ latest_run_source_policy.latest_error_summary }}</p>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </details>
+    {% endif %}
+
     <!-- Manifest Snapshot -->
     <h3 style="font-size:1rem; color:var(--text-heading); margin:0 0 0.75rem;">Manifest snapshot</h3>
     <div class="manifest-block">

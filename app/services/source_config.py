@@ -313,8 +313,11 @@ def env_int(name: str, default: int = 0) -> int:
 
 @dataclass(frozen=True)
 class SourceConfig:
+    searxng_enabled: bool
     searxng_base_url: str
     searxng_timeout_seconds: float
+    searxng_fallback_enabled: bool
+    searxng_max_results: int
     amadeus_enabled: bool
     amadeus_base_url: str
     amadeus_client_id: str
@@ -346,12 +349,25 @@ class SourceConfig:
     trvl_broad_allow_risky_alternatives: bool
     airport_index_db_path: str
     mock_search_enabled: bool
+    ai_search_planner_enabled: bool
+    ai_search_planner_provider: str
+    ai_search_planner_model: str
+    ai_search_planner_base_url: str
+    ai_search_planner_api_key: str
+    ai_search_planner_max_structured_searches: int
+    ai_search_planner_max_research_queries: int
+    ai_search_planner_allow_date_flex: bool
+    ai_search_planner_date_flex_days: int
+    ai_search_planner_timeout_seconds: float
 
 
 def load_source_config() -> SourceConfig:
     return SourceConfig(
+        searxng_enabled=env_bool("SEARXNG_ENABLED", True),
         searxng_base_url=env_value("SEARXNG_BASE_URL", "http://127.0.0.1:8888").strip(),
         searxng_timeout_seconds=env_float("SEARXNG_TIMEOUT_SECONDS", 5.0),
+        searxng_fallback_enabled=env_bool("SEARXNG_FALLBACK_ENABLED", True),
+        searxng_max_results=int(env_value("SEARXNG_MAX_RESULTS", "10")),
         amadeus_enabled=env_bool("AMADEUS_ENABLED", False),
         amadeus_base_url=env_value("AMADEUS_BASE_URL", "https://test.api.amadeus.com").strip().rstrip("/"),
         amadeus_client_id=env_value("AMADEUS_CLIENT_ID", "").strip(),
@@ -383,4 +399,14 @@ def load_source_config() -> SourceConfig:
         trvl_broad_allow_risky_alternatives=env_bool("TRVL_BROAD_ALLOW_RISKY_ALTERNATIVES", True),
         airport_index_db_path=env_value("AIRPORT_INDEX_DB_PATH", "data/airport_index.sqlite3").strip(),
         mock_search_enabled=env_bool("MOCK_SEARCH_ENABLED", False),
+        ai_search_planner_enabled=env_bool("AI_SEARCH_PLANNER_ENABLED", False),
+        ai_search_planner_provider=env_value("AI_SEARCH_PLANNER_PROVIDER", "disabled").strip(),
+        ai_search_planner_model=env_value("AI_SEARCH_PLANNER_MODEL", "").strip(),
+        ai_search_planner_base_url=env_value("AI_SEARCH_PLANNER_BASE_URL", "").strip(),
+        ai_search_planner_api_key=env_value("AI_SEARCH_PLANNER_API_KEY", "").strip(),
+        ai_search_planner_max_structured_searches=int(env_value("AI_SEARCH_PLANNER_MAX_STRUCTURED_SEARCHES", "8")),
+        ai_search_planner_max_research_queries=int(env_value("AI_SEARCH_PLANNER_MAX_RESEARCH_QUERIES", "5")),
+        ai_search_planner_allow_date_flex=env_bool("AI_SEARCH_PLANNER_ALLOW_DATE_FLEX", False),
+        ai_search_planner_date_flex_days=int(env_value("AI_SEARCH_PLANNER_DATE_FLEX_DAYS", "1")),
+        ai_search_planner_timeout_seconds=env_float("AI_SEARCH_PLANNER_TIMEOUT_SECONDS", 45.0),
     )

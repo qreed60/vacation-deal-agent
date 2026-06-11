@@ -430,8 +430,61 @@ def vacation_detail(vacation_id: int, request: Request, session: Session = Depen
             "vacation": vacation,
             "manifest": json.dumps(manifest, indent=2),
             "recent_runs": recent_runs,
+            # Phase 5A: search strategy and source policy
+            "search_strategy": _build_search_strategy_summary(recent_runs[0] if recent_runs else None),
+            "latest_run_source_policy": _build_source_policy_summary(recent_runs[0] if recent_runs else None),
         },
     )
+
+
+def _build_search_strategy_summary(latest_run: SearchRun | None) -> dict[str, Any]:
+    """Build search strategy summary from latest run's plan."""
+    if not latest_run or not latest_run.search_plan_json:
+        return {}
+    plan_data = safe_json_dict(latest_run.search_plan_json)
+    if not plan_data:
+        return {}
+
+    # Determine if AI planner was used
+    is_ai = False
+    summary_payload = safe_json_dict(latest_run.summary_json)
+    search_plan_info = summary_payload.get("search_plan", {})
+    if isinstance(search_plan_info, dict):
+        pv = search_plan_info.get("planner_version", "")
+        if isinstance(pv, str):
+            is_ai = pv.startswith("phase5a")
+
+    return {
+        "is_ai": is_ai,
+        "planner_version": plan_data.get("planner_version", ""),
+        "objective": plan_data.get("objective", ""),
+        "reasoning_summary": plan_data.get("reasoning_summary", ""),
+        "search_count": len(plan_data.get("searches") or []),
+        "fallback_search_count": len(plan_data.get("fallback_searches") or []),
+        "research_query_count": len(plan_data.get("research_queries") or []),
+    }
+
+
+def _build_source_policy_summary(latest_run: SearchRun | None) -> dict[str, Any]:
+    """Build source policy summary from latest run's summary."""
+    if not latest_run or not latest_run.summary_json:
+        return {}
+    summary = safe_json_dict(latest_run.summary_json)
+    if not summary:
+        return {}
+
+    # Only include if source_policy_version is present (Phase 5A+)
+    if "source_policy_version" not in summary:
+        return {}
+
+    return {
+        "attempted_sources": summary.get("attempted_sources", []),
+        "skipped_sources": summary.get("skipped_sources", []),
+        "best_available_result_type": summary.get("best_available_result_type", ""),
+        "research_fallback_used": summary.get("research_fallback_used", False),
+        "research_fallback_source": summary.get("research_fallback_source"),
+        "latest_error_summary": summary.get("latest_error_summary", ""),
+    }
 
 
 @router.post("/vacations/{vacation_id}/search-runs")

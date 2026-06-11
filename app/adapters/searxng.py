@@ -21,6 +21,7 @@ def search(
     timeout_seconds: float = 5.0,
     categories: list[str] | None = None,
     engines: list[str] | None = None,
+    max_results: int = 10,
 ) -> dict[str, Any]:
     if not base_url:
         return skipped_result("SEARXNG_BASE_URL is empty")
@@ -43,8 +44,12 @@ def search(
             "error_message": str(exc),
         }
 
+    # Limit results to max_results
+    all_results = raw.get("results", [])
+    limited_results = all_results[:max_results] if len(all_results) > max_results else all_results
+
     normalized_results = []
-    for item in raw.get("results", []):
+    for item in limited_results:
         url = item.get("url")
         normalized_results.append(
             {
