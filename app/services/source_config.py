@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.services.location_suggestions import CITY_DEFAULT_AIRPORT_MAP
+from app.services.location_suggestions import CITY_DEFAULT_AIRPORT_MAP, LOCATION_SEEDS, load_config as load_location_config
 
 
 # Small fallback city map for known common values.
@@ -13,10 +14,215 @@ _FALLBACK_CITY_MAP: dict[str, str] = {
     **CITY_DEFAULT_AIRPORT_MAP,
 }
 
+_STATE_ABBREVIATIONS: dict[str, str] = {
+    "ALABAMA": "AL",
+    "ALASKA": "AK",
+    "ARIZONA": "AZ",
+    "ARKANSAS": "AR",
+    "CALIFORNIA": "CA",
+    "COLORADO": "CO",
+    "CONNECTICUT": "CT",
+    "DELAWARE": "DE",
+    "FLORIDA": "FL",
+    "GEORGIA": "GA",
+    "HAWAII": "HI",
+    "IDAHO": "ID",
+    "ILLINOIS": "IL",
+    "INDIANA": "IN",
+    "IOWA": "IA",
+    "KANSAS": "KS",
+    "KENTUCKY": "KY",
+    "LOUISIANA": "LA",
+    "MAINE": "ME",
+    "MARYLAND": "MD",
+    "MASSACHUSETTS": "MA",
+    "MICHIGAN": "MI",
+    "MINNESOTA": "MN",
+    "MISSISSIPPI": "MS",
+    "MISSOURI": "MO",
+    "MONTANA": "MT",
+    "NEBRASKA": "NE",
+    "NEVADA": "NV",
+    "NEW HAMPSHIRE": "NH",
+    "NEW JERSEY": "NJ",
+    "NEW MEXICO": "NM",
+    "NEW YORK": "NY",
+    "NORTH CAROLINA": "NC",
+    "NORTH DAKOTA": "ND",
+    "OHIO": "OH",
+    "OKLAHOMA": "OK",
+    "OREGON": "OR",
+    "PENNSYLVANIA": "PA",
+    "RHODE ISLAND": "RI",
+    "SOUTH CAROLINA": "SC",
+    "SOUTH DAKOTA": "SD",
+    "TENNESSEE": "TN",
+    "TEXAS": "TX",
+    "UTAH": "UT",
+    "VERMONT": "VT",
+    "VIRGINIA": "VA",
+    "WASHINGTON": "WA",
+    "WEST VIRGINIA": "WV",
+    "WISCONSIN": "WI",
+    "WYOMING": "WY",
+    "DISTRICT OF COLUMBIA": "DC",
+}
+
+_COUNTRY_SUFFIXES = {"UNITED STATES", "UNITED STATES OF AMERICA", "USA", "US", "U S A", "U S"}
+
+
+@dataclass(frozen=True)
+class ResolutionResult:
+    input_value: str
+    resolved_airport_code: str | None
+    status: str
+    source: str
+    reason: str
+
 
 def _is_iata_code(value: str) -> bool:
     """Check if a string looks like a 3-letter IATA airport code."""
     return bool(re.fullmatch(r"[A-Z]{3}", value.strip()))
+
+
+def _clean_token(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _normalized_label(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _state_to_abbreviation(value: str | None) -> str | None:
+    if not value:
+        return None
+    token = _clean_token(value).upper().replace(".", "")
+    if len(token) == 2 and token.isalpha():
+        return token
+    return _STATE_ABBREVIATIONS.get(token)
+
+
+def _candidate_city_state_pairs(value: str) -> list[tuple[str, str | None]]:
+    parts = [_clean_token(part) for part in re.split(r",+", value) if _clean_token(part)]
+    while parts and _clean_token(parts[-1]).upper().replace(".", "") in _COUNTRY_SUFFIXES:
+        parts.pop()
+    candidates: list[tuple[str, str | None]] = []
+    if parts:
+        first = parts[0]
+        if re.fullmatch(r"\d{3,}(?:-\d+)?", first) and len(parts) >= 2:
+            city = parts[1]
+            state = _state_to_abbreviation(parts[2] if len(parts) >= 3 else None)
+            candidates.append((city, state))
+        else:
+            state = _state_to_abbreviation(parts[1] if len(parts) >= 2 else None)
+            candidates.append((first, state))
+    words = _clean_token(value)
+    if words:
+        candidates.append((words, None))
+    deduped: list[tuple[str, str | None]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for city, state in candidates:
+        key = (_normalized_label(city), state)
+        if key not in seen:
+            seen.add(key)
+            deduped.append((city, state))
+    return deduped
+
+
+def _seed_city_map() -> dict[tuple[str, str | None], str]:
+    mapping: dict[tuple[str, str | None], str] = {}
+    for seed in LOCATION_SEEDS:
+        if seed.kind != "airport" or not seed.airport_code:
+            continue
+        state = _state_to_abbreviation(seed.region)
+        mapping.setdefault((_normalized_label(seed.city), state), seed.airport_code)
+        mapping.setdefault((_normalized_label(seed.city), None), seed.airport_code)
+        mapping.setdefault((_normalized_label(seed.city_label), None), seed.airport_code)
+        for alias in seed.aliases:
+            mapping.setdefault((_normalized_label(alias), state), seed.airport_code)
+            mapping.setdefault((_normalized_label(alias), None), seed.airport_code)
+    for label, code in _FALLBACK_CITY_MAP.items():
+        for city, state in _candidate_city_state_pairs(label):
+            mapping.setdefault((_normalized_label(city), state), code)
+    return mapping
+
+
+def _resolve_from_seed(value: str) -> str | None:
+    mapping = _seed_city_map()
+    for city, state in _candidate_city_state_pairs(value):
+        key = (_normalized_label(city), state)
+        if key in mapping:
+            return mapping[key]
+        fallback_key = (_normalized_label(city), None)
+        if fallback_key in mapping:
+            return mapping[fallback_key]
+    return None
+
+
+def _airport_index_type_rank(airport_type: str | None) -> int:
+    ranks = {
+        "large_airport": 0,
+        "medium_airport": 1,
+        "small_airport": 2,
+    }
+    return ranks.get(str(airport_type or ""), 9)
+
+
+def _resolve_from_airport_index(value: str, config: "SourceConfig | None" = None) -> str | None:
+    path = getattr(config, "airport_index_db_path", None) if config is not None else None
+    if not path:
+        path = load_location_config().airport_index_db_path
+    if not path or not Path(path).exists():
+        return None
+    pairs = _candidate_city_state_pairs(value)
+    try:
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT type, municipality, iso_country, iso_region, iata_code
+                FROM airports
+                WHERE iata_code IS NOT NULL
+                  AND iata_code != ''
+                  AND municipality_normalized IN ({})
+                """.format(",".join("?" for _ in pairs) or "''"),
+                tuple(_normalized_label(city) for city, _state in pairs),
+            ).fetchall()
+    except sqlite3.Error:
+        return None
+    matches: list[sqlite3.Row] = []
+    for row in rows:
+        if str(row["iso_country"] or "").upper() not in {"US", "USA", ""}:
+            continue
+        row_state = _state_to_abbreviation(str(row["iso_region"] or "").split("-")[-1])
+        row_city = _normalized_label(str(row["municipality"] or ""))
+        for city, state in pairs:
+            if row_city != _normalized_label(city):
+                continue
+            if state and row_state and state != row_state:
+                continue
+            matches.append(row)
+            break
+    if not matches:
+        return None
+    ranked = sorted(matches, key=lambda row: (_airport_index_type_rank(row["type"]), str(row["iata_code"] or "")))
+    return str(ranked[0]["iata_code"] or "").strip().upper() or None
+
+
+def resolve_airport_code(value: str, config: "SourceConfig | None" = None) -> ResolutionResult:
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return ResolutionResult(raw_value, None, "unresolved", "none", "empty airport/city value")
+    direct = raw_value.upper()
+    if _is_iata_code(direct):
+        return ResolutionResult(raw_value, direct, "direct_iata", "direct_iata", "input is a direct IATA airport code")
+    indexed = _resolve_from_airport_index(raw_value, config)
+    if indexed:
+        return ResolutionResult(raw_value, indexed, "resolved", "airport_index", "matched airport index municipality")
+    seeded = _resolve_from_seed(raw_value)
+    if seeded:
+        return ResolutionResult(raw_value, seeded, "resolved", "seed", "matched seed city/default airport")
+    return ResolutionResult(raw_value, None, "unresolved", "none", "no airport match in airport index or seed data")
 
 
 def resolve_airport(raw_value: str, preferred_airports: list | None = None, alternate_airports: list | None = None) -> str | None:
@@ -43,18 +249,9 @@ def resolve_airport(raw_value: str, preferred_airports: list | None = None, alte
         if _is_iata_code(first):
             return first
 
-    # C. Raw value is already IATA
-    stripped = raw_value.strip().upper()
-    if _is_iata_code(stripped):
-        return stripped
+    result = resolve_airport_code(raw_value)
+    return result.resolved_airport_code
 
-    # D. Fallback city map (case-insensitive)
-    for key, code in _FALLBACK_CITY_MAP.items():
-        if raw_value.strip().lower() == key.lower():
-            return code
-
-    # E. Unresolved
-    return None
 
 
 def _load_dotenv(path: Path = Path(".env")) -> dict[str, str]:
@@ -147,6 +344,7 @@ class SourceConfig:
     trvl_broad_include_one_way_fallbacks: bool
     trvl_broad_max_alternatives: int
     trvl_broad_allow_risky_alternatives: bool
+    airport_index_db_path: str
     mock_search_enabled: bool
 
 
@@ -183,5 +381,6 @@ def load_source_config() -> SourceConfig:
         trvl_broad_include_one_way_fallbacks=env_bool("TRVL_BROAD_INCLUDE_ONE_WAY_FALLBACKS", True),
         trvl_broad_max_alternatives=int(env_value("TRVL_BROAD_MAX_ALTERNATIVES", "50")),
         trvl_broad_allow_risky_alternatives=env_bool("TRVL_BROAD_ALLOW_RISKY_ALTERNATIVES", True),
+        airport_index_db_path=env_value("AIRPORT_INDEX_DB_PATH", "data/airport_index.sqlite3").strip(),
         mock_search_enabled=env_bool("MOCK_SEARCH_ENABLED", False),
     )

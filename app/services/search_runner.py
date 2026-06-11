@@ -56,6 +56,38 @@ def _persist_adapter_result(
     return adapter_result["status"]
 
 
+def _flight_summary_diagnostics(plan: dict[str, Any], config: SourceConfig, manifest: dict[str, Any]) -> dict[str, Any]:
+    for query_entry in plan.get("queries", []):
+        if query_entry.get("result_type") != "flight":
+            continue
+        manifest_data = manifest or {}
+        query_json = trvl_adapter.build_flight_query(
+            query_entry["query"],
+            currency=config.trvl_currency,
+            preferred_airports=manifest_data.get("preferred_airports") or [],
+            alternate_airports=manifest_data.get("alternate_airports") or [],
+        )
+        return {
+            "origin_input": query_json.get("origin_value"),
+            "destination_input": query_json.get("destination_value"),
+            "resolved_origin_airport": query_json.get("origin_airport"),
+            "resolved_destination_airport": query_json.get("destination_airport"),
+            "origin_resolution_status": query_json.get("origin_resolution_status"),
+            "destination_resolution_status": query_json.get("destination_resolution_status"),
+            "origin_resolution_source": query_json.get("origin_resolution_source"),
+            "destination_resolution_source": query_json.get("destination_resolution_source"),
+            "traveler_count": query_json.get("traveler_count"),
+            "adult_count": query_json.get("adult_count"),
+            "child_count": query_json.get("child_count"),
+            "infant_count": query_json.get("infant_count"),
+            "trvl_adults_passed": query_json.get("trvl_adults_passed"),
+            "trvl_passenger_model": query_json.get("trvl_passenger_model"),
+            "departure_date": query_json.get("departure_date"),
+            "return_date": query_json.get("return_date"),
+        }
+    return {}
+
+
 def _run_real_sources(
     session: Session,
     search_run_id: int,
@@ -300,20 +332,20 @@ def _run_with_session(
         completed_at = utc_now()
         search_run.completed_at = completed_at
         search_run.updated_at = completed_at
-        search_run.summary_json = deterministic_json(
-            {
-                "best_deal_currency": best_deal.currency if best_deal else None,
-                "best_deal_id": best_deal.id if best_deal else None,
-                "best_deal_total_price": best_deal.total_price if best_deal else None,
-                "deal_candidate_count": len(deal_candidates),
-                "mock": effective_use_mock,
-                "priced_snapshot_count": len(price_snapshots),
-                "real_sources": use_real_sources,
-                "source_result_count": result_count,
-                "source_status_counts": status_counts,
-                "status": "completed",
-            }
-        )
+        summary_payload = {
+            "best_deal_currency": best_deal.currency if best_deal else None,
+            "best_deal_id": best_deal.id if best_deal else None,
+            "best_deal_total_price": best_deal.total_price if best_deal else None,
+            "deal_candidate_count": len(deal_candidates),
+            "mock": effective_use_mock,
+            "priced_snapshot_count": len(price_snapshots),
+            "real_sources": use_real_sources,
+            "source_result_count": result_count,
+            "source_status_counts": status_counts,
+            "status": "completed",
+        }
+        summary_payload.update(_flight_summary_diagnostics(plan, config, manifest))
+        search_run.summary_json = deterministic_json(summary_payload)
         session.add(search_run)
         session.commit()
         session.refresh(search_run)

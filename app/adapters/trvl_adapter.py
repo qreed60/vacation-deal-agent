@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from app.services.source_config import resolve_airport
+from app.services.source_config import resolve_airport_code
 
 
 SOURCE_NAME = "trvl"
@@ -34,7 +34,91 @@ def _skip(reason: str, result_type: str, query_json: dict[str, Any] | None = Non
         },
         "raw_result": {},
         "error_message": reason,
+}
+
+
+def _resolution_payload(resolution: Any) -> dict[str, Any]:
+    return {
+        "input_value": resolution.input_value,
+        "resolved_airport_code": resolution.resolved_airport_code,
+        "status": resolution.status,
+        "source": resolution.source,
+        "reason": resolution.reason,
     }
+
+
+def _traveler_counts(query: dict[str, Any]) -> dict[str, int]:
+    travelers = query.get("travelers")
+    if isinstance(travelers, list) and travelers:
+        adult_count = 0
+        child_count = 0
+        infant_count = 0
+        unknown_age_count = 0
+        for traveler in travelers:
+            age_value = traveler.get("age") if isinstance(traveler, dict) else None
+            try:
+                age = int(age_value)
+            except (TypeError, ValueError):
+                unknown_age_count += 1
+                continue
+            if age <= 1:
+                infant_count += 1
+            elif age < 18:
+                child_count += 1
+            else:
+                adult_count += 1
+        adult_count += unknown_age_count
+        if adult_count < 1:
+            adult_count = 1
+        return {
+            "traveler_count": len(travelers),
+            "adult_count": adult_count,
+            "child_count": child_count,
+            "infant_count": infant_count,
+        }
+    traveler_count = int(query.get("number_of_travelers") or 1)
+    traveler_count = max(1, traveler_count)
+    return {
+        "traveler_count": traveler_count,
+        "adult_count": traveler_count,
+        "child_count": int(query.get("children") or 0),
+        "infant_count": 0,
+    }
+
+
+def _command_diagnostics(
+    *,
+    command_label: str,
+    command: list[str] | Any,
+    result: subprocess.CompletedProcess[str] | None = None,
+    raw: Any = None,
+    elapsed_seconds: float | None = None,
+    exception: Exception | None = None,
+    query_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stdout = result.stdout if result is not None else ""
+    stderr = result.stderr if result is not None else ""
+    exit_code = result.returncode if result is not None else None
+    diagnostics = {
+        "command_label": command_label,
+        "argv": list(command) if isinstance(command, list) else command,
+        "exit_code": exit_code,
+        "elapsed_seconds": round(float(elapsed_seconds if elapsed_seconds is not None else getattr(result, "elapsed_seconds", 0) if result is not None else 0), 3),
+        "stdout_json_success": _success(raw),
+        "stdout_json_count": len(_candidate_items(raw, ("flights", "offers", "results", "itineraries"))) if isinstance(raw, dict) else 0,
+        "stderr_preview": _bounded_string(stderr, 500),
+        "stdout_preview": _bounded_string(stdout, 500),
+    }
+    if exception is not None:
+        diagnostics["exception_type"] = type(exception).__name__
+        diagnostics["exception_message"] = _bounded_string(str(exception), 500)
+    if query_json:
+        diagnostics["resolved_origin_airport"] = query_json.get("origin_airport")
+        diagnostics["resolved_destination_airport"] = query_json.get("destination_airport")
+        diagnostics["departure_date"] = query_json.get("departure_date")
+        diagnostics["return_date"] = query_json.get("return_date")
+        diagnostics["trvl_adults_passed"] = query_json.get("trvl_adults_passed")
+    return diagnostics
 
 
 def _error(message: str, result_type: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -351,18 +435,40 @@ def build_flight_query(
 ) -> dict[str, Any]:
     origin_raw = query.get("origin")
     destination_raw = query.get("destination")
-    travelers = int(query.get("number_of_travelers") or 1)
-    resolved_origin = resolve_airport(str(origin_raw), preferred_airports, alternate_airports) if origin_raw else None
-    resolved_destination = resolve_airport(str(destination_raw), preferred_airports, alternate_airports) if destination_raw else None
+    counts = _traveler_counts(query)
+    origin_resolution = resolve_airport_code(str(origin_raw)) if origin_raw else resolve_airport_code("")
+    destination_resolution = resolve_airport_code(str(destination_raw)) if destination_raw else resolve_airport_code("")
+    resolved_origin = origin_resolution.resolved_airport_code
+    resolved_destination = destination_resolution.resolved_airport_code
+    if preferred_airports:
+        first = str(preferred_airports[0]).strip().upper()
+        if len(first) == 3:
+            resolved_origin = first
+    if alternate_airports and not resolved_origin:
+        first = str(alternate_airports[0]).strip().upper()
+        if len(first) == 3:
+            resolved_origin = first
     return {
         "origin_value": origin_raw,
         "destination_value": destination_raw,
         "origin_airport": resolved_origin,
         "destination_airport": resolved_destination,
+        "origin_resolution": _resolution_payload(origin_resolution),
+        "destination_resolution": _resolution_payload(destination_resolution),
+        "origin_resolution_status": origin_resolution.status,
+        "destination_resolution_status": destination_resolution.status,
+        "origin_resolution_source": origin_resolution.source,
+        "destination_resolution_source": destination_resolution.source,
         "departure_date": query.get("start_date"),
         "return_date": query.get("end_date"),
-        "travelers_requested": travelers,
-        "adults_arg": max(1, travelers),
+        "travelers_requested": counts["traveler_count"],
+        "traveler_count": counts["traveler_count"],
+        "adult_count": counts["adult_count"],
+        "child_count": counts["child_count"],
+        "infant_count": counts["infant_count"],
+        "adults_arg": max(1, counts["traveler_count"]),
+        "trvl_adults_passed": max(1, counts["traveler_count"]),
+        "trvl_passenger_model": "all_travelers_as_adults",
         "currency": currency,
     }
 
@@ -895,11 +1001,15 @@ def search_trvl_flights(
     query_json = build_flight_query(query, currency=currency, preferred_airports=preferred_airports, alternate_airports=alternate_airports)
     if not enabled:
         return _skip("TRVL_ENABLED=false", "flight", query_json)
+    if not query_json.get("origin_airport"):
+        return _skip(f"Could not resolve origin to an airport code: {query_json.get('origin_value')}", "flight", query_json)
+    if not query_json.get("destination_airport"):
+        return _skip(f"Could not resolve destination to an airport code: {query_json.get('destination_value')}", "flight", query_json)
+    if not query_json.get("departure_date"):
+        return _skip("trvl flights requires departure_date", "flight", query_json)
     binary = resolve_trvl_binary(binary_path)
     if not binary:
         return _skip("TRVL_ENABLED=true but trvl binary was not found", "flight", query_json)
-    if not query_json.get("origin_airport") or not query_json.get("destination_airport") or not query_json.get("departure_date"):
-        return _skip("trvl flights requires resolved origin_airport, destination_airport, and departure_date", "flight", query_json)
 
     has_return = bool(query_json.get("return_date"))
 
@@ -916,11 +1026,57 @@ def search_trvl_flights(
     rt_command.extend(["--adults", str(query_json["adults_arg"]), "--currency", currency, "--format", "json"])
 
     traveler_pricing_note = None
-    if int(query_json["travelers_requested"] or 1) > 1 and int(query.get("children") or 0) > 0:
+    if int(query_json["travelers_requested"] or 1) > 1 and (
+        int(query_json.get("child_count") or 0) > 0 or int(query_json.get("infant_count") or 0) > 0
+    ):
         traveler_pricing_note = "trvl flight search priced all travelers as adults because trvl CLI only exposes --adults"
 
     # Run round-trip command (captured once, used everywhere)
-    rt_result = _run_trvl(rt_command, timeout_seconds)
+    try:
+        rt_result = _run_trvl(rt_command, timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        concise = f"trvl flights timed out after {timeout_seconds} seconds"
+        diagnostics = _command_diagnostics(
+            command_label="round_trip",
+            command=rt_command,
+            elapsed_seconds=timeout_seconds,
+            exception=exc,
+            query_json=query_json,
+        )
+        return {
+            "status": "error",
+            "normalized_result": {
+                "source_name": SOURCE_NAME,
+                "result_type": "flight",
+                "offers": [],
+                "reason": concise,
+                "command_results": [diagnostics],
+                "query": query_json,
+            },
+            "raw_result": {"diagnostic_error_excerpt": concise, "command_results": [diagnostics]},
+            "error_message": concise,
+        }
+    except OSError as exc:
+        concise = f"trvl flights failed to start: {exc}"
+        diagnostics = _command_diagnostics(
+            command_label="round_trip",
+            command=rt_command,
+            exception=exc,
+            query_json=query_json,
+        )
+        return {
+            "status": "error",
+            "normalized_result": {
+                "source_name": SOURCE_NAME,
+                "result_type": "flight",
+                "offers": [],
+                "reason": concise,
+                "command_results": [diagnostics],
+                "query": query_json,
+            },
+            "raw_result": {"diagnostic_error_excerpt": concise, "command_results": [diagnostics]},
+            "error_message": _concise_text(concise),
+        }
     rt_raw = _load_json_text(rt_result.stdout)
     rt_raw_summary = _raw_summary(
         rt_raw, rt_result.stdout, rt_result.stderr,
@@ -933,14 +1089,13 @@ def search_trvl_flights(
         broad_alternatives: list[dict[str, Any]] = []
         broad_skipped_reasons: list[dict[str, str]] = []
         command_results: list[dict[str, Any]] = [
-            {
-                "command_label": "round_trip",
-                "exit_code": rt_result.returncode,
-                "elapsed_seconds": round(getattr(rt_result, "elapsed_seconds", 0), 3),
-                "stdout_json_success": _success(rt_raw),
-                "stdout_json_count": len(_candidate_items(rt_raw, ("flights", "offers", "results", "itineraries"))) if isinstance(rt_raw, dict) else 0,
-                "stderr_preview": _bounded_string(rt_result.stderr, 500),
-            }
+            _command_diagnostics(
+                command_label="round_trip",
+                command=rt_command,
+                result=rt_result,
+                raw=rt_raw,
+                query_json=query_json,
+            )
         ]
 
         # Run one-way commands to collect diagnostics even when RT failed
@@ -955,14 +1110,15 @@ def search_trvl_flights(
             ]
             outbound_result = _run_trvl(outbound_command, timeout_seconds)
             bw_raw_out = _load_json_text(outbound_result.stdout)
-            command_results.append({
-                "command_label": "outbound_one_way",
-                "exit_code": outbound_result.returncode,
-                "elapsed_seconds": round(getattr(outbound_result, "elapsed_seconds", 0), 3),
-                "stdout_json_success": _success(bw_raw_out),
-                "stdout_json_count": len(_candidate_items(bw_raw_out, ("flights", "offers", "results", "itineraries"))) if isinstance(bw_raw_out, dict) else 0,
-                "stderr_preview": _bounded_string(outbound_result.stderr, 500),
-            })
+            command_results.append(
+                _command_diagnostics(
+                    command_label="outbound_one_way",
+                    command=outbound_command,
+                    result=outbound_result,
+                    raw=bw_raw_out,
+                    query_json=query_json,
+                )
+            )
 
             return_query_json = dict(query_json)
             return_query_json["origin_airport"] = query_json["destination_airport"]
@@ -980,14 +1136,15 @@ def search_trvl_flights(
             ]
             return_result = _run_trvl(return_command, timeout_seconds)
             bw_raw_ret = _load_json_text(return_result.stdout)
-            command_results.append({
-                "command_label": "return_one_way",
-                "exit_code": return_result.returncode,
-                "elapsed_seconds": round(getattr(return_result, "elapsed_seconds", 0), 3),
-                "stdout_json_success": _success(bw_raw_ret),
-                "stdout_json_count": len(_candidate_items(bw_raw_ret, ("flights", "offers", "results", "itineraries"))) if isinstance(bw_raw_ret, dict) else 0,
-                "stderr_preview": _bounded_string(return_result.stderr, 500),
-            })
+            command_results.append(
+                _command_diagnostics(
+                    command_label="return_one_way",
+                    command=return_command,
+                    result=return_result,
+                    raw=bw_raw_ret,
+                    query_json=return_query_json,
+                )
+            )
 
         # Build error result with bounded diagnostics for all commands
         concise = f"trvl flights exited with code {rt_result.returncode}"
@@ -999,6 +1156,7 @@ def search_trvl_flights(
                 "offers": [],
                 "reason": concise,
                 "command_results": command_results[:10],  # bounded to last 10 failures
+                "query": query_json,
             },
             "raw_result": rt_raw_summary,
             "error_message": concise,
@@ -1334,4 +1492,3 @@ def normalize_broad_alternatives(
         "command": _bounded_public_data(command_metadata or {}, max_depth=3, max_items=20),
         "query": query_json,
     }
-

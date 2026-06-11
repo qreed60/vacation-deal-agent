@@ -12,6 +12,7 @@ from app.services.manifest_io import vacation_from_manifest
 from app.services.quote_normalizer import snapshots_from_source_result
 from app.services.search_planner import deterministic_json
 from app.services.search_runner import run_search_once
+from app.web import routes
 
 
 def make_trvl(tmp_path, body: str):
@@ -215,6 +216,88 @@ print(json.dumps({"success": True, "flights": [{"price": 300, "currency": "USD",
     assert query["destination_airport"] == "MOT"
 
 
+def test_full_label_minot_trip_reaches_trvl_with_resolution_and_traveler_summary(tmp_path, monkeypatch):
+    db_path = tmp_path / "db.sqlite3"
+    monkeypatch.setenv("VACATION_DEAL_DB_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("AIRPORT_INDEX_DB_PATH", str(tmp_path / "missing.sqlite3"))
+    monkeypatch.setenv("SEARXNG_BASE_URL", "")
+    monkeypatch.setenv("AMADEUS_ENABLED", "false")
+    monkeypatch.setenv("GOOGLE_PLACES_ENABLED", "false")
+    monkeypatch.setenv("SERPAPI_ENABLED", "false")
+    monkeypatch.setenv("FAST_FLIGHTS_ENABLED", "false")
+    monkeypatch.setenv("TRVL_ENABLED", "true")
+    binary = make_trvl(
+        tmp_path,
+        """
+import json, sys
+print(json.dumps({"success": True, "argv": sys.argv, "flights": [{"price": 456, "currency": "USD", "provider": "Delta"}]}))
+""",
+    )
+    monkeypatch.setenv("TRVL_BINARY_PATH", str(binary))
+    SQLModel.metadata.drop_all(get_engine())
+    init_db()
+    with Session(get_engine()) as session:
+        vacation = create_vacation(
+            session,
+            origin="Pittsburgh, Pennsylvania, United States",
+            destination="Minot, North Dakota, United States",
+            number_of_travelers=4,
+            travelers=[
+                {"name": "Hanna", "age": 30},
+                {"name": "Emsley", "age": 5},
+                {"name": "Willa", "age": 3},
+                {"name": "Everhett", "age": 0},
+            ],
+            hotel_needed=False,
+            airfare_needed=True,
+        )
+        search_run = run_search_once(vacation.id, "manual", session=session, use_real_sources=True, use_mock=False)
+        trvl_result = session.exec(
+            select(SourceResult).where(SourceResult.search_run_id == search_run.id).where(SourceResult.source_name == "trvl")
+        ).one()
+        query = json.loads(trvl_result.query_json)
+        summary = json.loads(search_run.summary_json)
+        normalized = json.loads(trvl_result.normalized_result_json)
+
+    assert trvl_result.status == "completed"
+    assert query["origin_airport"] == "PIT"
+    assert query["destination_airport"] == "MOT"
+    assert query["origin_resolution_status"] == "resolved"
+    assert query["destination_resolution_status"] == "resolved"
+    assert query["traveler_count"] == 4
+    assert query["adult_count"] == 1
+    assert query["child_count"] == 2
+    assert query["infant_count"] == 1
+    assert query["trvl_adults_passed"] == 4
+    assert normalized["command"]["argv"][2:5] == ["PIT", "MOT", "2026-09-18"]
+    assert summary["resolved_origin_airport"] == "PIT"
+    assert summary["resolved_destination_airport"] == "MOT"
+    assert summary["traveler_count"] == 4
+    assert summary["adult_count"] == 1
+    assert summary["child_count"] == 2
+    assert summary["infant_count"] == 1
+
+
+def test_unresolved_city_skips_trvl_with_precise_diagnostic(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIRPORT_INDEX_DB_PATH", str(tmp_path / "missing.sqlite3"))
+
+    result = trvl_adapter.search_trvl_flights(
+        {
+            "origin": "Unknownville, ZZ, United States",
+            "destination": "MOT",
+            "start_date": "2026-09-18",
+            "number_of_travelers": 1,
+        },
+        enabled=True,
+        binary_path="/tmp/not-needed",
+    )
+
+    assert result["status"] == "skipped"
+    assert result["error_message"] == "Could not resolve origin to an airport code: Unknownville, ZZ, United States"
+    assert result["normalized_result"]["query"]["origin_resolution_status"] == "unresolved"
+    assert result["normalized_result"]["source_name"] == "trvl"
+
+
 def test_flight_results_sorted_deduplicated_and_bounded(monkeypatch):
     monkeypatch.setenv("TRVL_MAX_FLIGHT_RESULTS", "2")
     raw = {
@@ -311,6 +394,45 @@ sys.exit(7)
 
     assert result["status"] == "error"
     assert "exited with code 7" in result["error_message"]
+    normalized = result["normalized_result"]
+    command_result = normalized["command_results"][0]
+    assert command_result["command_label"] == "round_trip"
+    assert command_result["exit_code"] == 7
+    assert command_result["argv"][2:5] == ["PIT", "MOT", "2026-09-18"]
+    assert command_result["stderr_preview"] == "bad\n"
+    assert "stdout_preview" in command_result
+    assert "elapsed_seconds" in command_result
+    assert command_result["resolved_origin_airport"] == "PIT"
+    assert command_result["resolved_destination_airport"] == "MOT"
+
+
+def test_ui_manual_route_passes_real_sources_without_mock(tmp_path, monkeypatch):
+    db_path = tmp_path / "db.sqlite3"
+    monkeypatch.setenv("VACATION_DEAL_DB_URL", f"sqlite:///{db_path}")
+    SQLModel.metadata.drop_all(get_engine())
+    init_db()
+    captured = {}
+
+    def fake_run_search_once(vacation_id, trigger_type, *, use_real_sources, use_mock, session):
+        captured.update(
+            vacation_id=vacation_id,
+            trigger_type=trigger_type,
+            use_real_sources=use_real_sources,
+            use_mock=use_mock,
+            session=session,
+        )
+
+    monkeypatch.setattr(routes, "run_search_once", fake_run_search_once)
+
+    with Session(get_engine()) as session:
+        vacation = create_vacation(session, hotel_needed=False, airfare_needed=True)
+        response = routes.create_search_run(vacation.id, session=session)
+
+    assert response.status_code == 303
+    assert captured["vacation_id"] == vacation.id
+    assert captured["trigger_type"] == "manual"
+    assert captured["use_real_sources"] is True
+    assert captured["use_mock"] is False
 
 
 def test_disabled_trvl_creates_skipped_result():
@@ -2433,4 +2555,3 @@ def test_command_diagnostics_stderr_preview_bounded():
         # _bounded_string limits content to limit chars then appends truncation marker.
         # The original content portion must be bounded, not total string length.
         assert len(preview) < 600, f"stderr_preview too long: {len(preview)}"
-

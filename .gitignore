@@ -19,6 +19,8 @@ env/
 # Generated data, snapshots, caches
 data/free_source_probes/
 data/snapshots/
+data/airport_index.sqlite3
+data/location_autocomplete_cache.sqlite3
 data/vacation_deals.sqlite3
 *.sqlite3
 *.db
